@@ -248,3 +248,28 @@ def test_the_legend_explains_the_two_dot_colours(work):
     assert "coming next" in html
     # Drawn as the fretboard draws them, so the key is read off the board.
     assert 'id="legendnow"' in html and 'id="legendnext"' in html
+
+
+def test_upcoming_notes_are_named_too(work):
+    """A ring says where the next note is; the label says what it is."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    # The label is drawn for both kinds, distinguished only by how it looks.
+    assert "Both kinds are named" in html
+    assert '"font-size": isNow ? 11 : 10' in html
+
+
+def test_an_upcoming_ring_is_not_buried_under_a_sounding_dot(work):
+    """A note that repeats at the same fret must still show it is coming.
+
+    The sounding dot is larger than the ring, so painted afterwards it hid
+    the ring completely - and a repeat at the same position is exactly when
+    the warning matters most.
+    """
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    # Sounding notes are painted first, rings after, so nothing buries them.
+    assert html.index("active.forEach(n => placeDot(n, true, false))") < html.index(
+        "soon.forEach(n => placeDot(n, false,"
+    )
+    # And a ring over an occupied position is drawn wide enough to sit outside it.
+    assert "asHalo ? 18 : 11" in html
+    assert "if (asHalo) return;" in html
