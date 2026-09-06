@@ -149,3 +149,19 @@ def test_tuning_and_fret_count_reach_the_page(work):
     data = embedded(page.path.read_text(encoding="utf-8"))
     assert data["maxFret"] == 15
     assert data["tuning"][0] == "E4" and data["tuning"][5] == "E2"
+
+
+def test_the_page_says_so_when_audio_is_missing(work):
+    """Without its .wav files the page looked broken rather than incomplete."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert 'id="warn"' in html
+    assert "Audio not found" in html
+
+
+def test_the_page_still_runs_without_audio(work):
+    """A clock of its own drives the fretboard when the audio cannot load."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert "audioUsable" in html
+    assert "silentPlaying" in html
+    # The display reads the clock through one accessor, not audio directly.
+    assert "function currentTime()" in html
