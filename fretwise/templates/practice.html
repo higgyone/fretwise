@@ -199,7 +199,7 @@ function strengthOf(note) {
   return Math.max(0, Math.min(1, (note.confidence - CONF_LOW) / span));
 }
 
-function placeDot(note, isNow) {
+function placeDot(note, isNow, asHalo) {
   if (note.string === null || note.string === undefined) return;
   const x = note.fret === 0 ? OPEN_X : (fretX(note.fret - 1) + fretX(note.fret)) / 2;
   const strength = strengthOf(note);
@@ -209,13 +209,20 @@ function placeDot(note, isNow) {
   // glance. Size stays fixed so position is never ambiguous.
   const solid = 0.25 + 0.75 * strength;
   make("circle", {
-    cx: x, cy: stringY(note.string), r: isNow ? 13 : 11,
+    // A ring at a position already sounding is drawn wide enough to sit
+    // outside that dot rather than under it, so "this note comes again"
+    // stays visible instead of vanishing beneath the note it repeats.
+    cx: x, cy: stringY(note.string), r: isNow ? 13 : (asHalo ? 18 : 11),
     fill: isNow ? "var(--now)" : "none",
     "fill-opacity": isNow ? solid : 0,
     stroke: isNow ? "var(--now)" : "var(--soon)",
     "stroke-width": isNow ? 1 + 1.5 * strength : 2,
     opacity: isNow ? 1 : 0.45 + 0.35 * strength
   }, dots);
+  // A halo needs no label: it surrounds a dot at the same string and fret,
+  // which is by definition the same pitch, already named there.
+  if (asHalo) return;
+
   // Both kinds are named. A note about to arrive is as much use to read as
   // one already sounding, and the ring alone says where but not what.
   make("text", {
@@ -229,10 +236,18 @@ function placeDot(note, isNow) {
   }, dots).textContent = note.pitchClass;
 }
 
+function positionOf(note) {
+  return note.string + ":" + note.fret;
+}
+
 function drawDots(active, soon) {
   while (dots.firstChild) dots.removeChild(dots.firstChild);
-  soon.forEach(n => placeDot(n, false));
-  active.forEach(n => placeDot(n, true));
+
+  // Sounding notes first, then the rings for what is coming, so a ring is
+  // never buried under a dot painted after it.
+  const sounding = new Set(active.map(positionOf));
+  active.forEach(n => placeDot(n, true, false));
+  soon.forEach(n => placeDot(n, false, sounding.has(positionOf(n))));
 }
 
 // How weak a note may be and still be shown. Zero shows everything; the
