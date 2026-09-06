@@ -273,3 +273,11 @@ def test_an_upcoming_ring_is_not_buried_under_a_sounding_dot(work):
     # And a ring over an occupied position is drawn wide enough to sit outside it.
     assert "asHalo ? 18 : 11" in html
     assert "if (asHalo) return;" in html
+
+
+def test_the_confidence_filter_explains_itself_on_hover(work):
+    """What "hide below" means is not guessable from the label alone."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert 'class="filter" title="Hides notes that were detected weakly' in html
+    # And it says what the number is not, since that is the easy thing to assume.
+    assert "not a probability that it is correct" in html

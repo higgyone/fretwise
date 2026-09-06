@@ -108,9 +108,10 @@
   <button id="nextnote" aria-label="Next note">note &#9654;</button>
   <span id="speeds"></span>
   <span class="spacer"></span>
-  <span class="filter">
+  <span class="filter" title="Hides notes that were detected weakly, leaving the ones the transcription is most sure of. Note stepping skips whatever is hidden.&#10;&#10;Strength is how clearly a note stood out in the audio, not a probability that it is correct, and it varies smoothly with no natural cut-off - so where to draw the line is your judgement, not a setting with a right answer.">
     <label for="minconf">Hide below</label>
-    <input type="range" id="minconf" min="0" max="1" step="0.02" value="0">
+    <input type="range" id="minconf" min="0" max="1" step="0.02" value="0"
+           aria-describedby="hidden">
     <span class="readout" id="hidden">showing all</span>
   </span>
   <span class="spacer"></span>
