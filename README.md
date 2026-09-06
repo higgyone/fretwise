@@ -18,8 +18,10 @@ playable-along-with practice tool.
    guitar can be isolated from drums/vocals/rhythm before pitch tracking.
 3. **Onset detection** — `librosa.onset.onset_detect` finds where each note
    starts.
-4. **Pitch tracking** — `librosa.pyin` (or `crepe` for noisy/distorted
-   signals) estimates the fundamental frequency per note segment.
+4. **Pitch tracking** — `basic-pitch` transcribes note events directly,
+   including overlapping ones, so a chord comes back as a chord.
+   `librosa.pyin` remains available via `--engine pyin`, but tracks only one
+   pitch at a time.
 5. **Note mapping** — Hz is snapped to the nearest semitone and converted to
    a note name (e.g. `E4`).
 6. **Fretboard mapping** — each note is mapped to all valid `(string, fret)`

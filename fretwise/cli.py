@@ -19,6 +19,10 @@ from .analyze import (
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
 from .key import annotate, estimate_key, in_key_fraction
 from .notes import NoteError, midi_to_hz, name_to_midi
+from .transcribe import (
+    DEFAULT_FRAME_THRESHOLD, DEFAULT_MAX_MIDI, DEFAULT_MIN_MIDI, DEFAULT_ONSET_THRESHOLD,
+    TranscriptionError, transcribe_file,
+)
 from .separate import (
     DEFAULT_MODEL, DEFAULT_STEM, STEMS, SeparationError, separate, separate_all,
 )
@@ -75,6 +79,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze_cmd.add_argument(
         "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    analyze_cmd.add_argument(
+        "--engine", default="basic-pitch", choices=("basic-pitch", "pyin"),
+        help="basic-pitch transcribes chords; pyin tracks one pitch at a time",
+    )
+    analyze_cmd.add_argument(
+        "--onset-threshold", type=float, default=DEFAULT_ONSET_THRESHOLD,
+        help="basic-pitch: lower finds more note starts (default: 0.5)",
+    )
+    analyze_cmd.add_argument(
+        "--frame-threshold", type=float, default=DEFAULT_FRAME_THRESHOLD,
+        help="basic-pitch: lower keeps quieter notes (default: 0.3)",
     )
     analyze_cmd.add_argument(
         "--sensitivity", type=float, default=0.5,
@@ -210,7 +226,16 @@ def run_analyze(args: argparse.Namespace) -> int:
     if args.min_confidence is not None:
         options["min_confidence"] = args.min_confidence
 
-    notes = analyze_file(clip, **options)
+    if args.engine == "basic-pitch":
+        notes = transcribe_file(
+            clip,
+            min_midi=name_to_midi(args.fmin) if not args.fmin[0].isdigit() else DEFAULT_MIN_MIDI,
+            max_midi=name_to_midi(args.fmax) if not args.fmax[0].isdigit() else DEFAULT_MAX_MIDI,
+            onset_threshold=args.onset_threshold,
+            frame_threshold=args.frame_threshold,
+        )
+    else:
+        notes = analyze_file(clip, **options)
     key = estimate_key(notes)
     annotate(notes, key)
 
@@ -377,7 +402,9 @@ def main(argv: list[str] | None = None) -> int:
             return run_sonify(args)
         if args.command == "probe":
             return run_probe(args)
-    except (IngestError, TimestampError, NoteError, SeparationError, ValueError) as exc:
+    except (
+        IngestError, TimestampError, NoteError, SeparationError, TranscriptionError, ValueError
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0
