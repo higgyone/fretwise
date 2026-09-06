@@ -27,11 +27,15 @@ playable-along-with practice tool.
 6. **Fretboard mapping** — each note is mapped to all valid `(string, fret)`
    positions in standard tuning, with a default position chosen to minimize
    hand movement from the previous note.
-7. **Audio rendering** — `pyrubberband` / `librosa.effects.time_stretch`
-   pre-render pitch-preserving slowed versions of the clip (e.g. 50%, 75%,
-   100% speed).
-8. **Practice view** — a static HTML/JS page renders an SVG fretboard with a
-   playhead synced to audio, a speed selector, and loop-region markers.
+7. **Audio rendering** — ffmpeg's `atempo` filter pre-renders
+   pitch-preserving slowed versions of the clip (50%, 75%, 100% by default).
+   `librosa.effects.time_stretch` is available as `--backend librosa`.
+   `pyrubberband` is not used: it shells out to a `rubberband` binary, where
+   ffmpeg is already a dependency of the ingest stage.
+8. **Practice view** — `fretwise view` writes a static HTML page: an SVG
+   fretboard lit up in time with the audio, a timeline of the whole part,
+   a speed selector backed by the stage 7 renders, and a loop you drag out.
+   The note data is embedded, so the page opens straight from disk.
 
 ## Output format
 
@@ -92,8 +96,23 @@ no better than a guess.
 - Stage 2 (separate) — built: `fretwise separate --all`
 - Stages 3-5 (onsets, pitch, note names) — built: `fretwise analyze --separate`
 - Stage 6 (fretboard mapping) — built, part of `fretwise analyze`
+- Stage 7 (slowed renders) — built: `fretwise render --speeds 0.5,0.75,1.0`
 - Key estimation and scale degrees — built, reported by `fretwise analyze`
-- Stages 7, 8 — not yet built
+- Stage 8 (practice view) — built: `fretwise view`
+
+## Using it
+
+```
+fretwise ingest "<youtube url>" --end 150   # download and trim
+fretwise separate --all                     # isolate the guitar stem
+fretwise analyze --separate                 # notes, key, degrees, fretboard
+fretwise render                             # 50% / 75% / 100% audio
+fretwise view --title "Some Song"           # work/practice.html
+```
+
+Serving the page needs a web server that honours HTTP `Range`; without it a
+browser treats the audio as unseekable and the timeline cannot scrub.
+GitHub Pages does. `python -m http.server` does **not**.
 
 Run end to end on a real full-band track. Two things to know:
 

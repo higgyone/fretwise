@@ -18,6 +18,8 @@ from .analyze import (
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
 from .fretboard import DEFAULT_MAX_FRET, map_notes
+from .stretch import DEFAULT_SPEEDS, StretchError, render_speeds
+from .view import DEFAULT_VIEW_SPEED, ViewError, write_page
 from .cleanup import MAX_HELD_GAP, MAX_SEMITONES_ABOVE, drop_stray_notes, merge_held_notes
 from .key import annotate, estimate_key, in_key_fraction
 from .notes import NoteError, midi_to_hz, name_to_midi
@@ -147,6 +149,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_cmd.add_argument("--fmin", default="E2", help="lowest pitch to search for")
     probe_cmd.add_argument("--fmax", default="E6", help="highest pitch to search for")
+
+    view_cmd = subcommands.add_parser(
+        "view", help="build the practice page: fretboard, playhead, speeds, looping"
+    )
+    view_cmd.add_argument(
+        "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    view_cmd.add_argument("--title", default=None, help="heading for the page")
+    view_cmd.add_argument(
+        "--default-speed", type=float, default=DEFAULT_VIEW_SPEED,
+        help=f"speed the page opens at (default: {DEFAULT_VIEW_SPEED})",
+    )
+    view_cmd.add_argument(
+        "--max-fret", type=int, default=DEFAULT_MAX_FRET, help="frets to draw"
+    )
+
+    render_cmd = subcommands.add_parser(
+        "render", help="pre-render the clip at slower, pitch-preserving speeds"
+    )
+    render_cmd.add_argument(
+        "clip", nargs="?", default=None, type=Path,
+        help="WAV to render (default: <work-dir>/clip.wav)",
+    )
+    render_cmd.add_argument(
+        "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    render_cmd.add_argument(
+        "--speeds", default=",".join(str(s) for s in DEFAULT_SPEEDS),
+        help=f"comma separated playback speeds (default: {','.join(str(s) for s in DEFAULT_SPEEDS)})",
+    )
+    render_cmd.add_argument(
+        "--backend", default="ffmpeg", choices=("ffmpeg", "librosa"),
+        help="ffmpeg's atempo (default) or librosa's phase vocoder",
+    )
 
     sonify_cmd = subcommands.add_parser(
         "sonify", help="play the detected notes back, to check them by ear"
@@ -373,6 +409,42 @@ def load_probe(work_dir: Path) -> list[Candidate]:
     return [Candidate(**entry) for entry in json.loads(path.read_text(encoding="utf-8"))]
 
 
+def run_view(args: argparse.Namespace) -> int:
+    notes_path = args.work_dir / "notes.json"
+    if not notes_path.exists():
+        raise ViewError(f"no notes at {notes_path} - run `fretwise analyze` first")
+
+    notes, key = load_notes(notes_path)
+    page = write_page(
+        notes, args.work_dir, key=key,
+        title=args.title or notes_path.parent.resolve().name,
+        default_speed=args.default_speed, max_fret=args.max_fret,
+    )
+
+    speeds = ", ".join(f"{speed:g}x" for speed in sorted(page.speeds))
+    print(f"{page.path}  ({page.notes} notes, speeds: {speeds or 'none'})")
+    if page.missing_audio:
+        print("  missing audio, so those speeds are not offered: "
+              + ", ".join(page.missing_audio))
+        print("  run `fretwise render` to make them")
+    return 0
+
+
+def run_render(args: argparse.Namespace) -> int:
+    clip = resolve_clip(args)
+    try:
+        speeds = tuple(float(part) for part in args.speeds.split(",") if part.strip())
+    except ValueError:
+        raise StretchError(f"could not read speeds: {args.speeds!r}") from None
+
+    print(f"rendering {clip} at {', '.join(f'{s:g}x' for s in speeds)}...")
+    for speed, path in sorted(render_speeds(
+        clip, speeds=speeds, out_dir=args.work_dir, backend=args.backend
+    ).items()):
+        print(f"  {speed:>5g}x -> {path}")
+    return 0
+
+
 def run_sonify(args: argparse.Namespace) -> int:
     start = parse_timestamp(args.start) or 0.0
     end = parse_timestamp(args.end)
@@ -436,10 +508,15 @@ def main(argv: list[str] | None = None) -> int:
             return run_separate(args)
         if args.command == "sonify":
             return run_sonify(args)
+        if args.command == "render":
+            return run_render(args)
+        if args.command == "view":
+            return run_view(args)
         if args.command == "probe":
             return run_probe(args)
     except (
-        IngestError, TimestampError, NoteError, SeparationError, TranscriptionError, ValueError
+        IngestError, TimestampError, NoteError, SeparationError, TranscriptionError,
+        StretchError, ViewError, ValueError
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
