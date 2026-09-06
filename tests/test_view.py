@@ -248,3 +248,11 @@ def test_the_legend_explains_the_two_dot_colours(work):
     assert "coming next" in html
     # Drawn as the fretboard draws them, so the key is read off the board.
     assert 'id="legendnow"' in html and 'id="legendnext"' in html
+
+
+def test_upcoming_notes_are_named_too(work):
+    """A ring says where the next note is; the label says what it is."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    # The label is drawn for both kinds, distinguished only by how it looks.
+    assert "Both kinds are named" in html
+    assert '"font-size": isNow ? 11 : 10' in html

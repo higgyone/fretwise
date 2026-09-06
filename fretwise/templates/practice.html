@@ -209,21 +209,24 @@ function placeDot(note, isNow) {
   // glance. Size stays fixed so position is never ambiguous.
   const solid = 0.25 + 0.75 * strength;
   make("circle", {
-    cx: x, cy: stringY(note.string), r: isNow ? 13 : 9,
+    cx: x, cy: stringY(note.string), r: isNow ? 13 : 11,
     fill: isNow ? "var(--now)" : "none",
     "fill-opacity": isNow ? solid : 0,
     stroke: isNow ? "var(--now)" : "var(--soon)",
     "stroke-width": isNow ? 1 + 1.5 * strength : 2,
-    opacity: isNow ? 1 : 0.35 + 0.4 * strength
+    opacity: isNow ? 1 : 0.45 + 0.35 * strength
   }, dots);
-  if (isNow) {
-    make("text", {
-      x: x, y: stringY(note.string) + 4, "text-anchor": "middle",
-      "font-size": 11, "font-weight": 700,
+  // Both kinds are named. A note about to arrive is as much use to read as
+  // one already sounding, and the ring alone says where but not what.
+  make("text", {
+    x: x, y: stringY(note.string) + 4, "text-anchor": "middle",
+    "font-size": isNow ? 11 : 10, "font-weight": 700,
+    fill: isNow
       // Dark on a solid dot, light on a faint one, so the name stays readable.
-      fill: strength > 0.45 ? "#1a1206" : "var(--now)"
-    }, dots).textContent = note.pitchClass;
-  }
+      ? (strength > 0.45 ? "#1a1206" : "var(--now)")
+      : "var(--soon)",
+    opacity: isNow ? 1 : 0.65 + 0.35 * strength
+  }, dots).textContent = note.pitchClass;
 }
 
 function drawDots(active, soon) {
