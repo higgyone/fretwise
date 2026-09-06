@@ -239,3 +239,12 @@ def test_the_confidence_filter_is_the_players_choice(work):
     assert 'id="minconf"' in html
     assert 'value="0"' in html
     assert "let minStrength = 0;" in html
+
+
+def test_the_legend_explains_the_two_dot_colours(work):
+    """Colour means when, not what, and that was the one thing unlabelled."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert "sounding now" in html
+    assert "coming next" in html
+    # Drawn as the fretboard draws them, so the key is read off the board.
+    assert 'id="legendnow"' in html and 'id="legendnext"' in html

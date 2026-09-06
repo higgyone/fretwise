@@ -45,8 +45,14 @@
     border-radius: 999px; padding: 3px 10px; font-size: 0.85rem; font-variant-numeric: tabular-nums;
   }
   .chip .deg { color: var(--dim); margin-left: 6px; }
-  .legend { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 0.8rem; margin-top: 8px; }
-  .legend svg { width: 108px; height: 20px; flex: 0 0 auto; }
+  .legend {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px 18px;
+    color: var(--dim); font-size: 0.8rem; margin-top: 8px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend svg { height: 20px; flex: 0 0 auto; }
+  #legendbar { width: 108px; }
+  .swatch { width: 24px; }
   .filter { display: flex; align-items: center; gap: 8px; }
   .filter input { accent-color: var(--soon); width: 130px; }
   .hint { color: var(--dim); font-size: 0.8rem; margin-top: 6px; }
@@ -71,10 +77,20 @@
   <svg id="fretboard" viewBox="0 0 1000 260" role="img" aria-label="Guitar fretboard"></svg>
   <div class="now-playing" id="nowplaying"></div>
   <div class="legend">
-    <span>weakly detected</span>
-    <svg id="legendbar" viewBox="0 0 108 20" aria-hidden="true"></svg>
-    <span>strongly detected</span>
-    <span id="legendnote"></span>
+    <span class="legend-item">
+      <svg class="swatch" id="legendnow" viewBox="0 0 24 20" aria-hidden="true"></svg>
+      sounding now
+    </span>
+    <span class="legend-item">
+      <svg class="swatch" id="legendnext" viewBox="0 0 24 20" aria-hidden="true"></svg>
+      coming next
+    </span>
+    <span class="legend-item">
+      weakly detected
+      <svg id="legendbar" viewBox="0 0 108 20" aria-hidden="true"></svg>
+      strongly detected
+      <span id="legendnote"></span>
+    </span>
   </div>
 </div>
 
@@ -226,6 +242,19 @@ function strongEnough(note) {
 }
 
 function drawLegend() {
+  // The same two shapes the fretboard draws, so the key is read off the
+  // board rather than described in words: filled orange for a note sounding,
+  // a hollow blue ring for one about to.
+  make("circle", {
+    cx: 12, cy: 10, r: 8, fill: "var(--now)", "fill-opacity": 1,
+    stroke: "var(--now)", "stroke-width": 2
+  }, document.getElementById("legendnow"));
+
+  make("circle", {
+    cx: 12, cy: 10, r: 7, fill: "none",
+    stroke: "var(--soon)", "stroke-width": 2, opacity: 0.75
+  }, document.getElementById("legendnext"));
+
   const bar = document.getElementById("legendbar");
   for (let i = 0; i < 6; i++) {
     const strength = i / 5;
@@ -523,8 +552,7 @@ function frame() {
 document.getElementById("keyline").textContent =
   DATA.key ? DATA.key.name + " - " + DATA.notes.length + " notes"
            : DATA.notes.length + " notes";
-document.getElementById("legendnote").textContent =
-  "(relative to this clip)";
+document.getElementById("legendnote").textContent = "(relative to this clip)";
 
 drawBoard();
 drawLegend();
