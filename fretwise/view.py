@@ -15,6 +15,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from statistics import quantiles
+
 from .fretboard import DEFAULT_MAX_FRET, STANDARD_TUNING
 from .stretch import DEFAULT_SPEEDS, speed_label
 
@@ -57,6 +59,29 @@ def note_payload(note) -> dict:
     }
 
 
+def confidence_range(notes) -> dict:
+    """The span of confidences in this clip, for shading notes against.
+
+    Confidence here is how strongly a note was detected, not a probability
+    that it is correct, and its range differs from one recording to the next.
+    Shading against the clip's own spread says "less strongly detected than
+    its neighbours", which is what a player can act on; an absolute threshold
+    would imply a certainty the number does not carry.
+
+    The tenth and ninetieth percentiles are used so that one very quiet or
+    one very loud note does not flatten everything else.
+    """
+    values = sorted(note.confidence for note in notes)
+    if len(values) < 10:
+        low, high = (values[0], values[-1]) if values else (0.0, 1.0)
+    else:
+        deciles = quantiles(values, n=10)
+        low, high = deciles[0], deciles[-1]
+    if high - low < 0.05:  # a flat clip: shade everything the same
+        low, high = low - 0.025, high + 0.025
+    return {"low": round(low, 4), "high": round(high, 4)}
+
+
 def build_payload(
     notes,
     *,
@@ -80,6 +105,7 @@ def build_payload(
         "key": key,
         "duration": round(max(duration, 0.1), 3),
         "tuning": list(STANDARD_TUNING),
+        "confidence": confidence_range(notes),
         "maxFret": max_fret,
         # A list, not an object keyed by speed: JSON writes 1.0 as 1, so a
         # float used as a key does not survive the round trip to JavaScript.

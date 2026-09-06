@@ -45,6 +45,10 @@
     border-radius: 999px; padding: 3px 10px; font-size: 0.85rem; font-variant-numeric: tabular-nums;
   }
   .chip .deg { color: var(--dim); margin-left: 6px; }
+  .legend { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 0.8rem; margin-top: 8px; }
+  .legend svg { width: 108px; height: 20px; flex: 0 0 auto; }
+  .filter { display: flex; align-items: center; gap: 8px; }
+  .filter input { accent-color: var(--soon); width: 130px; }
   .hint { color: var(--dim); font-size: 0.8rem; margin-top: 6px; }
   .warn {
     background: #3a2a12; border: 1px solid #a9761f; color: #f0c674;
@@ -66,16 +70,33 @@
 <div class="panel">
   <svg id="fretboard" viewBox="0 0 1000 260" role="img" aria-label="Guitar fretboard"></svg>
   <div class="now-playing" id="nowplaying"></div>
+  <div class="legend">
+    <span>weakly detected</span>
+    <svg id="legendbar" viewBox="0 0 108 20" aria-hidden="true"></svg>
+    <span>strongly detected</span>
+    <span id="legendnote"></span>
+  </div>
 </div>
 
 <div class="panel">
   <svg id="timeline" viewBox="0 0 1000 90" role="img" aria-label="Note timeline"></svg>
-  <div class="hint">Click the timeline to seek. Drag across it to set a loop.</div>
+  <div class="hint">
+    Click the timeline to seek. Drag across it to set a loop.
+    Left and right arrows step from note to note; hold shift to jump 5 seconds.
+  </div>
 </div>
 
 <div class="panel controls">
+  <button id="prevnote" aria-label="Previous note">&#9664; note</button>
   <button id="play" aria-label="Play or pause">Play</button>
+  <button id="nextnote" aria-label="Next note">note &#9654;</button>
   <span id="speeds"></span>
+  <span class="spacer"></span>
+  <span class="filter">
+    <label for="minconf">Hide below</label>
+    <input type="range" id="minconf" min="0" max="1" step="0.02" value="0">
+    <span class="readout" id="hidden">showing all</span>
+  </span>
   <span class="spacer"></span>
   <button id="loopclear">Clear loop</button>
   <span class="readout" id="loopreadout">no loop</span>
@@ -152,19 +173,39 @@ const dots = make("g", {});
 // than off to the side of it: the dot belongs where the eye is already looking.
 const OPEN_X = X0 + 16;
 
+// Confidence is how strongly a note was detected, not a probability that it
+// is right, and its range differs between recordings. Notes are shaded
+// against the spread of this clip, so a faint dot means "less certain than
+// what is around it" rather than any absolute claim.
+const CONF_LOW = DATA.confidence.low, CONF_HIGH = DATA.confidence.high;
+function strengthOf(note) {
+  const span = Math.max(CONF_HIGH - CONF_LOW, 1e-6);
+  return Math.max(0, Math.min(1, (note.confidence - CONF_LOW) / span));
+}
+
 function placeDot(note, isNow) {
   if (note.string === null || note.string === undefined) return;
   const x = note.fret === 0 ? OPEN_X : (fretX(note.fret - 1) + fretX(note.fret)) / 2;
+  const strength = strengthOf(note);
+
+  // Weak notes are drawn hollow and faint, strong ones solid: the dot is
+  // always in the right place, but how much to trust it is visible at a
+  // glance. Size stays fixed so position is never ambiguous.
+  const solid = 0.25 + 0.75 * strength;
   make("circle", {
     cx: x, cy: stringY(note.string), r: isNow ? 13 : 9,
     fill: isNow ? "var(--now)" : "none",
+    "fill-opacity": isNow ? solid : 0,
     stroke: isNow ? "var(--now)" : "var(--soon)",
-    "stroke-width": 2, opacity: isNow ? 1 : 0.75
+    "stroke-width": isNow ? 1 + 1.5 * strength : 2,
+    opacity: isNow ? 1 : 0.35 + 0.4 * strength
   }, dots);
   if (isNow) {
     make("text", {
       x: x, y: stringY(note.string) + 4, "text-anchor": "middle",
-      "font-size": 11, "font-weight": 700, fill: "#1a1206"
+      "font-size": 11, "font-weight": 700,
+      // Dark on a solid dot, light on a faint one, so the name stays readable.
+      fill: strength > 0.45 ? "#1a1206" : "var(--now)"
     }, dots).textContent = note.pitchClass;
   }
 }
@@ -174,6 +215,37 @@ function drawDots(active, soon) {
   soon.forEach(n => placeDot(n, false));
   active.forEach(n => placeDot(n, true));
 }
+
+// How weak a note may be and still be shown. Zero shows everything; the
+// player decides where to stop trusting, since nothing in the numbers marks
+// a natural cut-off.
+let minStrength = 0;
+
+function strongEnough(note) {
+  return strengthOf(note) >= minStrength;
+}
+
+function drawLegend() {
+  const bar = document.getElementById("legendbar");
+  for (let i = 0; i < 6; i++) {
+    const strength = i / 5;
+    make("circle", {
+      cx: 10 + i * 18, cy: 10, r: 7,
+      fill: "var(--now)", "fill-opacity": 0.25 + 0.75 * strength,
+      stroke: "var(--now)", "stroke-width": 1 + 1.5 * strength
+    }, bar);
+  }
+}
+
+const slider = document.getElementById("minconf");
+const hiddenReadout = document.getElementById("hidden");
+slider.addEventListener("input", () => {
+  minStrength = Number(slider.value);
+  const hidden = DATA.notes.filter(n => !strongEnough(n)).length;
+  hiddenReadout.textContent = hidden
+    ? hidden + " of " + DATA.notes.length + " hidden"
+    : "showing all";
+});
 
 const TL_W = 1000, TL_H = 90, TL_PAD = 6;
 let loopStart = null, loopEnd = null;
@@ -346,13 +418,56 @@ playButton.addEventListener("click", togglePlay);
 audio.addEventListener("play", () => { playButton.textContent = "Pause"; });
 audio.addEventListener("pause", () => { playButton.textContent = "Play"; });
 
+// Stepping from note to note, so a phrase can be worked through one note at
+// a time without the audio running away. Onsets are used rather than every
+// note, so a chord is one step rather than four.
+// Notes of a strummed chord do not begin at quite the same instant, so
+// onsets within this window count as one stop rather than several.
+const CHORD_WINDOW = 0.06;
+
+function onsets() {
+  const times = DATA.notes.filter(strongEnough)
+    .map(n => n.time)
+    .sort((a, b) => a - b);
+
+  const stops = [];
+  for (const t of times) {
+    if (!stops.length || t - stops[stops.length - 1] > CHORD_WINDOW) stops.push(t);
+  }
+  return stops;
+}
+
+function stepNote(direction) {
+  const now = currentTime();
+  const stops = onsets();
+  // A small margin, so stepping forward from exactly on a note moves off it
+  // rather than finding the note already under the playhead.
+  const margin = 0.02;
+  const next = direction > 0
+    ? stops.find(t => t > now + margin)
+    : [...stops].reverse().find(t => t < now - margin);
+
+  if (next === undefined) return;
+  if (isPlaying()) togglePlay();  // stepping means studying, not playing
+  seek(next);
+}
+
+document.getElementById("nextnote").addEventListener("click", () => stepNote(1));
+document.getElementById("prevnote").addEventListener("click", () => stepNote(-1));
+
 document.addEventListener("keydown", e => {
   if (e.code === "Space") {
     e.preventDefault();
     togglePlay();
   }
-  if (e.code === "ArrowLeft") seek(Math.max(0, currentTime() - 5));
-  if (e.code === "ArrowRight") seek(currentTime() + 5);
+  if (e.code === "ArrowLeft") {
+    e.preventDefault();
+    if (e.shiftKey) { seek(Math.max(0, currentTime() - 5)); } else { stepNote(-1); }
+  }
+  if (e.code === "ArrowRight") {
+    e.preventDefault();
+    if (e.shiftKey) { seek(currentTime() + 5); } else { stepNote(1); }
+  }
 });
 
 function clock(t) {
@@ -373,8 +488,12 @@ function frame() {
   const t = currentTime();
   if (loopStart !== null && (t >= loopEnd || t < loopStart - 0.25)) seek(loopStart);
 
-  const active = DATA.notes.filter(n => n.time <= t && t < n.time + n.duration);
-  const soon = DATA.notes.filter(n => n.time > t && n.time < t + 0.4);
+  const active = DATA.notes.filter(
+    n => n.time <= t && t < n.time + n.duration && strongEnough(n)
+  );
+  const soon = DATA.notes.filter(
+    n => n.time > t && n.time < t + 0.4 && strongEnough(n)
+  );
   drawDots(active, soon);
 
   cursor.setAttribute("x1", timeX(t));
@@ -404,8 +523,11 @@ function frame() {
 document.getElementById("keyline").textContent =
   DATA.key ? DATA.key.name + " - " + DATA.notes.length + " notes"
            : DATA.notes.length + " notes";
+document.getElementById("legendnote").textContent =
+  "(relative to this clip)";
 
 drawBoard();
+drawLegend();
 board.appendChild(dots);  // on top of the board, not under it
 drawTimeline();
 loadSpeed(DATA.defaultSpeed, 0);

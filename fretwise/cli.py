@@ -40,7 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_cmd = subcommands.add_parser(
         "ingest", help="download a clip and trim it to a mono WAV"
     )
-    ingest_cmd.add_argument("url", help="YouTube (or any yt-dlp supported) URL")
+    ingest_cmd.add_argument(
+        "source",
+        help="a URL to download, or the path of an audio or video file on disk",
+    )
     ingest_cmd.add_argument(
         "--start", default=None, help="clip start, e.g. 12, 1:23 or 0:01:23.5"
     )
@@ -224,7 +227,7 @@ def parse_pitch(value: str, *, padding: int = 0) -> float:
 
 def run_ingest(args: argparse.Namespace) -> int:
     clip = ingest(
-        args.url,
+        args.source,
         work_dir=args.work_dir,
         start=args.start,
         end=args.end,
