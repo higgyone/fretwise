@@ -62,7 +62,23 @@ playable-along-with practice tool.
 
 ## Status
 
-Spec complete. Extraction pipeline and fretboard viewer not yet built.
+- Stage 1 (ingest) — built: `fretwise ingest <url> --start 1:23 --end 1:41`
+- Stage 2 (separate) — built: `fretwise separate --all`
+- Stages 3-5 (onsets, pitch, note names) — built: `fretwise analyze --separate`
+- Stages 6, 7, 8 — not yet built
+
+Run end to end on a real full-band track. Two things to know:
+
+**Separation is not optional on a band mix.** `pyin` tracks one pitch at a
+time, so on the raw mix every segment came back below the confidence floor.
+Demucs lifts it into usable range. `htdemucs` has no guitar stem — lead
+guitar lands in `other`, alongside keys and anything else pitched.
+
+**Recall is low.** A 150s clip yielded 21 notes where the real part has many
+more. Precision looks reasonable (86% of detected pitches fell inside a
+single major key, against ~58% for random pitches, and a drum stem correctly
+yields nothing), but the detector is missing most of what is played. That is
+the next thing worth working on.
 
 ## Roadmap / stretch goals
 
