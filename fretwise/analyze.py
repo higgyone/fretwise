@@ -22,6 +22,15 @@ DEFAULT_FMIN = midi_to_hz(name_to_midi("E2") - RANGE_PADDING_SEMITONES)
 DEFAULT_FMAX = midi_to_hz(name_to_midi("E6") + RANGE_PADDING_SEMITONES)
 
 DEFAULT_HOP_LENGTH = 256
+# Analysis runs at half rate. The highest pitch searched for is E6 at ~1.3 kHz,
+# so 22.05 kHz leaves an enormous margin, and pyin is several times faster.
+ANALYSIS_SAMPLE_RATE = 22050
+
+# Separation leaves a stem whose level swings as notes drift in and out of what
+# the model assigns to it. Dividing out a slow loudness envelope evens that up,
+# so a quiet passage produces onsets on the same footing as a loud one.
+GAIN_WINDOW = 1.0
+MAX_GAIN = 15.0
 # Ignore the first slice of each segment: pick attacks are broadband noise and
 # confuse the pitch tracker before the string settles.
 ATTACK_SKIP = 0.03
@@ -65,6 +74,34 @@ def load_audio(path: Path | str, sample_rate: int | None = None) -> tuple[np.nda
     """Load a clip as a mono float array."""
     y, sr = librosa.load(str(path), sr=sample_rate, mono=True)
     return y, sr
+
+
+def flatten_gain(
+    y: np.ndarray,
+    sr: int,
+    *,
+    window: float = GAIN_WINDOW,
+    max_gain: float = MAX_GAIN,
+) -> np.ndarray:
+    """Even out slow level changes, leaving note attacks intact.
+
+    Divides by a smoothed loudness envelope, so a passage the separator
+    faded down is raised to sit alongside the rest. The window is long
+    compared with a note, so the sudden rise at a pick survives; the gain is
+    capped so near-silence is not amplified into noise.
+    """
+    frame = max(int(window * sr), 1)
+    if y.size < frame:
+        return y
+
+    envelope = np.sqrt(np.convolve(y**2, np.ones(frame) / frame, mode="same"))
+    audible = envelope[envelope > 0]
+    if not audible.size:
+        return y
+
+    reference = float(np.percentile(audible, 70))
+    gain = np.clip(reference / np.maximum(envelope, 1e-9), 1.0 / max_gain, max_gain)
+    return (y * gain).astype(np.float32)
 
 
 def detect_onsets(
@@ -202,9 +239,12 @@ def candidates(
     hop_length: int = DEFAULT_HOP_LENGTH,
     min_duration: float = MIN_DURATION,
     min_confidence: float = MIN_CONFIDENCE,
+    flatten: bool = True,
 ) -> list[Candidate]:
     """Every onset with its pitch estimate and the verdict passed on it."""
     duration = len(y) / sr
+    if flatten:
+        y = flatten_gain(y, sr)
     onsets = detect_onsets(y, sr, sensitivity=sensitivity, hop_length=hop_length)
     if len(onsets) == 0:
         return []
@@ -251,13 +291,17 @@ def load_notes(path: Path | str) -> tuple[list[DetectedNote], dict | None]:
     return [DetectedNote.from_dict(entry) for entry in payload["notes"]], payload.get("key")
 
 
-def analyze_file(path: Path | str, **kwargs) -> list[DetectedNote]:
+def analyze_file(
+    path: Path | str, sample_rate: int = ANALYSIS_SAMPLE_RATE, **kwargs
+) -> list[DetectedNote]:
     """Load a clip from disk and analyze it."""
-    y, sr = load_audio(path)
+    y, sr = load_audio(path, sample_rate=sample_rate)
     return analyze(y, sr, **kwargs)
 
 
-def candidates_file(path: Path | str, **kwargs) -> list[Candidate]:
+def candidates_file(
+    path: Path | str, sample_rate: int = ANALYSIS_SAMPLE_RATE, **kwargs
+) -> list[Candidate]:
     """Load a clip from disk and report every onset in it."""
-    y, sr = load_audio(path)
+    y, sr = load_audio(path, sample_rate=sample_rate)
     return candidates(y, sr, **kwargs)
