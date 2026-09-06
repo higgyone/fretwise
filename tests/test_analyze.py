@@ -87,7 +87,7 @@ def test_to_dict_rounds_floats(phrase):
     entry = analyze(y, SR)[0].to_dict()
     assert set(entry) == {
         "time", "duration", "note", "midi", "hz", "cents", "confidence",
-        "degree", "numeral",
+        "degree", "numeral", "options", "chosen",
     }
     assert entry["note"] == "E4"
     assert isinstance(entry["midi"], int)

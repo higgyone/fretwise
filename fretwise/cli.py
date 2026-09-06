@@ -17,6 +17,7 @@ from .analyze import (
     load_audio, load_notes,
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
+from .fretboard import DEFAULT_MAX_FRET, map_notes
 from .cleanup import MAX_HELD_GAP, MAX_SEMITONES_ABOVE, drop_stray_notes, merge_held_notes
 from .key import annotate, estimate_key, in_key_fraction
 from .notes import NoteError, midi_to_hz, name_to_midi
@@ -80,6 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze_cmd.add_argument(
         "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    analyze_cmd.add_argument(
+        "--max-fret", type=int, default=DEFAULT_MAX_FRET,
+        help=f"highest fret to map notes onto (default: {DEFAULT_MAX_FRET})",
     )
     analyze_cmd.add_argument(
         "--held-gap", type=float, default=MAX_HELD_GAP,
@@ -261,6 +266,10 @@ def run_analyze(args: argparse.Namespace) -> int:
 
     key = estimate_key(notes)
     annotate(notes, key)
+    notes = map_notes(notes, max_fret=args.max_fret)
+    unplayable = sum(1 for n in notes if n.chosen is None)
+    if unplayable:
+        print(f"{unplayable} notes could not be given a string of their own")
 
     destination = args.work_dir / "notes.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -286,10 +295,14 @@ def run_analyze(args: argparse.Namespace) -> int:
         )
     for note in notes[:10]:
         degree = f"{note.degree:>3}" if note.degree else "  -"
+        where = (
+            f"str {note.chosen['string']} fret {note.chosen['fret']:<2}"
+            if note.chosen else "unplayable"
+        )
         print(
             f"  {format_timestamp(note.time)}  {note.note:<4}"
             f"  {note.duration:5.2f}s  conf {note.confidence:.2f}"
-            f"  degree {degree}  {note.numeral or '-'}"
+            f"  degree {degree:<3} {note.numeral or '-':<5} {where}"
         )
     if len(notes) > 10:
         print(f"  ... and {len(notes) - 10} more")

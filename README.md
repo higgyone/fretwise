@@ -91,8 +91,9 @@ no better than a guess.
 - Stage 1 (ingest) — built: `fretwise ingest <url> --start 1:23 --end 1:41`
 - Stage 2 (separate) — built: `fretwise separate --all`
 - Stages 3-5 (onsets, pitch, note names) — built: `fretwise analyze --separate`
+- Stage 6 (fretboard mapping) — built, part of `fretwise analyze`
 - Key estimation and scale degrees — built, reported by `fretwise analyze`
-- Stages 6, 7, 8 — not yet built
+- Stages 7, 8 — not yet built
 
 Run end to end on a real full-band track. Two things to know:
 
