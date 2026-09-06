@@ -50,6 +50,10 @@ class DetectedNote:
     degree: str | None = None
     numeral: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "DetectedNote":
+        return cls(**{field: data[field] for field in cls.__dataclass_fields__ if field in data})
+
     def to_dict(self) -> dict:
         data = asdict(self)
         for key in ("time", "duration", "hz", "cents", "confidence"):
@@ -115,6 +119,49 @@ def track_pitch(
     return times, f0, voiced_prob
 
 
+@dataclass
+class Candidate:
+    """One onset, with what was found there and whether it survived filtering.
+
+    Every onset produces a candidate, including the rejected ones. Keeping
+    the rejects visible is the only way to tell a note the detector never
+    saw from one it saw and threw away.
+    """
+
+    time: float
+    duration: float
+    confidence: float
+    voiced_fraction: float
+    verdict: str  # "kept", "short", "unvoiced", or "low-confidence"
+    hz: float | None = None
+    midi: int | None = None
+    note: str | None = None
+    cents: float | None = None
+
+    @property
+    def kept(self) -> bool:
+        return self.verdict == "kept"
+
+    def to_note(self) -> DetectedNote:
+        return DetectedNote(
+            time=self.time, duration=self.duration, note=self.note, midi=self.midi,
+            hz=self.hz, cents=self.cents, confidence=self.confidence,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "time": round(self.time, 4),
+            "duration": round(self.duration, 4),
+            "note": self.note,
+            "midi": self.midi,
+            "hz": None if self.hz is None else round(self.hz, 4),
+            "cents": None if self.cents is None else round(self.cents, 4),
+            "confidence": round(self.confidence, 4),
+            "voiced_fraction": round(self.voiced_fraction, 4),
+            "verdict": self.verdict,
+        }
+
+
 def _summarize_segment(
     start: float,
     end: float,
@@ -123,8 +170,11 @@ def _summarize_segment(
     voiced_prob: np.ndarray,
     *,
     attack_skip: float = ATTACK_SKIP,
-) -> tuple[float, float] | None:
-    """Median pitch and mean confidence over one segment, or ``None`` if unvoiced."""
+) -> tuple[float, float, float] | None:
+    """Pitch, confidence and voiced fraction over one segment.
+
+    Returns ``None`` when no frame in the segment carried a pitch at all.
+    """
     window_start = start + attack_skip
     if window_start >= end:  # very short segment: use all of it rather than nothing
         window_start = start
@@ -133,10 +183,16 @@ def _summarize_segment(
     voiced = in_window & np.isfinite(f0)
     if not voiced.any():
         return None
-    return float(np.median(f0[voiced])), float(np.mean(voiced_prob[voiced]))
+
+    voiced_fraction = float(voiced.sum() / max(int(in_window.sum()), 1))
+    return (
+        float(np.median(f0[voiced])),
+        float(np.mean(voiced_prob[voiced])),
+        voiced_fraction,
+    )
 
 
-def analyze(
+def candidates(
     y: np.ndarray,
     sr: int,
     *,
@@ -146,8 +202,8 @@ def analyze(
     hop_length: int = DEFAULT_HOP_LENGTH,
     min_duration: float = MIN_DURATION,
     min_confidence: float = MIN_CONFIDENCE,
-) -> list[DetectedNote]:
-    """Run stages 3-5 over loaded audio and return the notes found."""
+) -> list[Candidate]:
+    """Every onset with its pitch estimate and the verdict passed on it."""
     duration = len(y) / sr
     onsets = detect_onsets(y, sr, sensitivity=sensitivity, hop_length=hop_length)
     if len(onsets) == 0:
@@ -157,32 +213,51 @@ def analyze(
         y, sr, fmin=fmin, fmax=fmax, hop_length=hop_length
     )
 
-    notes: list[DetectedNote] = []
+    found: list[Candidate] = []
     for start, end in segment_bounds(onsets, duration):
-        if end - start < min_duration:
+        span = end - start
+        if span < min_duration:
+            found.append(Candidate(start, span, 0.0, 0.0, "short"))
             continue
+
         summary = _summarize_segment(start, end, times, f0, voiced_prob)
         if summary is None:
+            found.append(Candidate(start, span, 0.0, 0.0, "unvoiced"))
             continue
-        hz, confidence = summary
-        if confidence < min_confidence:
-            continue
+
+        hz, confidence, voiced_fraction = summary
         midi, name, cents = snap(hz)
-        notes.append(
-            DetectedNote(
-                time=start,
-                duration=end - start,
-                note=name,
-                midi=midi,
-                hz=hz,
-                cents=cents,
-                confidence=confidence,
+        verdict = "kept" if confidence >= min_confidence else "low-confidence"
+        found.append(
+            Candidate(
+                time=start, duration=span, confidence=confidence,
+                voiced_fraction=voiced_fraction, verdict=verdict,
+                hz=hz, midi=midi, note=name, cents=cents,
             )
         )
-    return notes
+    return found
+
+
+def analyze(y: np.ndarray, sr: int, **kwargs) -> list[DetectedNote]:
+    """Run stages 3-5 over loaded audio and return the notes that survived."""
+    return [c.to_note() for c in candidates(y, sr, **kwargs) if c.kept]
+
+
+def load_notes(path: Path | str) -> tuple[list[DetectedNote], dict | None]:
+    """Read a notes.json written by the analyze stage. Returns ``(notes, key)``."""
+    import json
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [DetectedNote.from_dict(entry) for entry in payload["notes"]], payload.get("key")
 
 
 def analyze_file(path: Path | str, **kwargs) -> list[DetectedNote]:
     """Load a clip from disk and analyze it."""
     y, sr = load_audio(path)
     return analyze(y, sr, **kwargs)
+
+
+def candidates_file(path: Path | str, **kwargs) -> list[Candidate]:
+    """Load a clip from disk and report every onset in it."""
+    y, sr = load_audio(path)
+    return candidates(y, sr, **kwargs)

@@ -9,7 +9,14 @@ from fretwise import separate as sep
 
 def test_rejects_an_unknown_stem(tmp_path):
     with pytest.raises(sep.SeparationError, match="unknown stem"):
-        sep.separate(tmp_path / "clip.wav", stem="guitar")
+        sep.separate(tmp_path / "clip.wav", stem="banjo")
+
+
+def test_the_default_model_has_a_guitar_stem():
+    """The whole point of the 6-source model: a four-source one has no guitar."""
+    assert "guitar" in sep.MODEL_STEMS[sep.DEFAULT_MODEL]
+    assert sep.DEFAULT_STEM == "guitar"
+    assert "guitar" not in sep.STEMS_4
 
 
 def test_reports_a_clear_error_when_demucs_is_missing(tmp_path, monkeypatch):
@@ -49,7 +56,7 @@ def test_separates_a_real_mix(tmp_path):
     clip = tmp_path / "clip.wav"
     sf.write(clip, (tone + clicks).astype(np.float32), sr)
 
-    stem = sep.separate(clip, stem="other", out_dir=tmp_path)
+    stem = sep.separate(clip, stem="other", model="htdemucs", out_dir=tmp_path)
     assert stem.exists() and stem.name == "clip-other.wav"
     audio, rate = sf.read(stem)
     assert audio.ndim == 1 and len(audio) > 0
@@ -61,6 +68,6 @@ def test_separate_all_writes_every_stem(tmp_path):
     t = np.linspace(0, 2.0, sr * 2, endpoint=False)
     sf.write(tmp_path / "clip.wav", (0.4 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr)
 
-    written = sep.separate_all(tmp_path / "clip.wav", out_dir=tmp_path)
-    assert set(written) == set(sep.STEMS)
+    written = sep.separate_all(tmp_path / "clip.wav", model="htdemucs", out_dir=tmp_path)
+    assert set(written) == set(sep.MODEL_STEMS["htdemucs"])
     assert all(path.exists() for path in written.values())
