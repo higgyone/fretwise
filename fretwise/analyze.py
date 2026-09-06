@@ -31,6 +31,14 @@ ANALYSIS_SAMPLE_RATE = 22050
 # so a quiet passage produces onsets on the same footing as a loud one.
 GAIN_WINDOW = 1.0
 MAX_GAIN = 15.0
+
+# How far pyin may let the pitch move between frames, in octaves per second.
+# librosa's default of 35.92 leaves room for a jump to a harmonic, which is
+# how a note ends up reported an octave high. Measured on a guitar stem,
+# anything from 5 to 12 removes most of those; below about 4 the pitch track
+# is forced so flat that separate notes merge into one. 8 sits at the loose
+# end of the plateau, leaving room for genuinely fast playing.
+MAX_TRANSITION_RATE = 8.0
 # Ignore the first slice of each segment: pick attacks are broadband noise and
 # confuse the pitch tracker before the string settles.
 ATTACK_SKIP = 0.03
@@ -147,10 +155,24 @@ def track_pitch(
     fmin: float = DEFAULT_FMIN,
     fmax: float = DEFAULT_FMAX,
     hop_length: int = DEFAULT_HOP_LENGTH,
+    frame_length: int | None = None,
+    max_transition_rate: float | None = MAX_TRANSITION_RATE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Run pyin over the whole clip. Returns ``(times, f0, voiced_prob)``."""
+    """Run pyin over the whole clip. Returns ``(times, f0, voiced_prob)``.
+
+    ``frame_length`` sets the analysis window: a longer one resolves low
+    notes better, at the cost of blurring fast ones. ``max_transition_rate``
+    caps how far the pitch may move between frames, which is what discourages
+    a spurious jump to a harmonic. Both default to librosa's own values.
+    """
+    tuning = {}
+    if frame_length is not None:
+        tuning["frame_length"] = frame_length
+    if max_transition_rate is not None:
+        tuning["max_transition_rate"] = max_transition_rate
+
     f0, _voiced_flag, voiced_prob = librosa.pyin(
-        y, fmin=fmin, fmax=fmax, sr=sr, hop_length=hop_length
+        y, fmin=fmin, fmax=fmax, sr=sr, hop_length=hop_length, **tuning
     )
     times = librosa.times_like(f0, sr=sr, hop_length=hop_length)
     return times, f0, voiced_prob
@@ -240,6 +262,8 @@ def candidates(
     min_duration: float = MIN_DURATION,
     min_confidence: float = MIN_CONFIDENCE,
     flatten: bool = True,
+    frame_length: int | None = None,
+    max_transition_rate: float | None = MAX_TRANSITION_RATE,
 ) -> list[Candidate]:
     """Every onset with its pitch estimate and the verdict passed on it."""
     duration = len(y) / sr
@@ -250,7 +274,8 @@ def candidates(
         return []
 
     times, f0, voiced_prob = track_pitch(
-        y, sr, fmin=fmin, fmax=fmax, hop_length=hop_length
+        y, sr, fmin=fmin, fmax=fmax, hop_length=hop_length,
+        frame_length=frame_length, max_transition_rate=max_transition_rate,
     )
 
     found: list[Candidate] = []
