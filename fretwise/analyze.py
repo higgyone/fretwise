@@ -66,6 +66,9 @@ class DetectedNote:
     # Filled in by fretwise.key.annotate once the key is known.
     degree: str | None = None
     numeral: str | None = None
+    # Filled in by fretwise.fretboard.map_notes.
+    options: list | None = None
+    chosen: dict | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "DetectedNote":
