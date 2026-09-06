@@ -1,7 +1,4 @@
 # fretwise
-Extract lead guitar notes from audio samples
-
-# fretwise
 
 Extract lead guitar notes from a YouTube clip, then practice them with an
 interactive fretboard view — slow it down, loop a phrase, and see exactly
