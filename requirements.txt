@@ -1,0 +1,21 @@
+# Stage 1 — ingest
+yt-dlp
+imageio-ffmpeg     # fallback ffmpeg binary when none is on PATH
+
+# Stages 3-5 — analysis
+librosa
+numpy
+soundfile
+
+# Optional: source separation (stage 2)
+demucs
+# torch 2.14 fails to load its DLLs on this machine (Windows / Python 3.10);
+# the CPU build of 2.5.1 works:
+#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
+
+# Optional: pitch-preserving time stretch (stage 7)
+# pyrubberband
+
+# Optional: deep-learning pitch tracker, alternative to pyin
+# crepe

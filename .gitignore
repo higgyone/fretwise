@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# fretwise working files (downloads, trimmed clips, rendered audio)
+work/
