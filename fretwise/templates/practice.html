@@ -143,11 +143,18 @@ function drawBoard() {
   }
 }
 
+// Created here but re-appended after the board is drawn: SVG paints in
+// document order, and this group is built before drawBoard() runs, so left
+// where it is the opaque fretboard would cover every dot.
 const dots = make("g", {});
+
+// An open string is marked just inside the nut, on the board itself, rather
+// than off to the side of it: the dot belongs where the eye is already looking.
+const OPEN_X = X0 + 16;
 
 function placeDot(note, isNow) {
   if (note.string === null || note.string === undefined) return;
-  const x = note.fret === 0 ? X0 - 26 : (fretX(note.fret - 1) + fretX(note.fret)) / 2;
+  const x = note.fret === 0 ? OPEN_X : (fretX(note.fret - 1) + fretX(note.fret)) / 2;
   make("circle", {
     cx: x, cy: stringY(note.string), r: isNow ? 13 : 9,
     fill: isNow ? "var(--now)" : "none",
@@ -399,6 +406,7 @@ document.getElementById("keyline").textContent =
            : DATA.notes.length + " notes";
 
 drawBoard();
+board.appendChild(dots);  // on top of the board, not under it
 drawTimeline();
 loadSpeed(DATA.defaultSpeed, 0);
 requestAnimationFrame(frame);
