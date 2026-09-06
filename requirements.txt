@@ -4,8 +4,18 @@ imageio-ffmpeg     # fallback ffmpeg binary when none is on PATH
 
 # Stages 3-5 — analysis
 librosa
-numpy
 soundfile
+# numpy is held below 2 because the onnxruntime build that loads on this
+# machine (see below) was compiled against numpy 1.x.
+numpy<2
+
+# Note transcription (default engine). Polyphonic, so chords come back as
+# chords; pyin, the fallback, can only track one pitch at a time.
+basic-pitch[onnx]
+# The current onnxruntime fails to initialise its DLLs here, as torch 2.14
+# does; 1.16.3 loads. The C++ runtime is not the cause - it is already newer
+# than these wheels require.
+onnxruntime==1.16.3
 
 # Optional: source separation (stage 2)
 demucs

@@ -13,12 +13,20 @@ from pathlib import Path
 
 import numpy as np
 
-# Demucs' htdemucs model produces exactly these four stems. Guitar is not one
-# of them; lead guitar ends up in "other" along with keys and anything else
-# that is not drums, bass or vocals.
-STEMS = ("drums", "bass", "other", "vocals")
-DEFAULT_STEM = "other"
-DEFAULT_MODEL = "htdemucs"
+# The four-source models split a mix into these parts only. Guitar is not one
+# of them, so on those models a guitar ends up spread across "other" and, for
+# lower notes, "bass" -- which is why a guitar tracked through them fades in
+# and out as notes cross whatever the model considers bass-like.
+STEMS_4 = ("drums", "bass", "other", "vocals")
+# htdemucs_6s adds a guitar stem, which is what this tool actually wants.
+STEMS_6 = STEMS_4 + ("guitar", "piano")
+STEMS = STEMS_6  # accepted on the command line; what a model yields is checked at runtime
+
+MODEL_STEMS = {"htdemucs": STEMS_4, "htdemucs_ft": STEMS_4, "mdx_extra": STEMS_4,
+               "htdemucs_6s": STEMS_6}
+
+DEFAULT_MODEL = "htdemucs_6s"
+DEFAULT_STEM = "guitar"
 
 
 class SeparationError(RuntimeError):

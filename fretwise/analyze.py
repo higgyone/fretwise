@@ -22,6 +22,23 @@ DEFAULT_FMIN = midi_to_hz(name_to_midi("E2") - RANGE_PADDING_SEMITONES)
 DEFAULT_FMAX = midi_to_hz(name_to_midi("E6") + RANGE_PADDING_SEMITONES)
 
 DEFAULT_HOP_LENGTH = 256
+# Analysis runs at half rate. The highest pitch searched for is E6 at ~1.3 kHz,
+# so 22.05 kHz leaves an enormous margin, and pyin is several times faster.
+ANALYSIS_SAMPLE_RATE = 22050
+
+# Separation leaves a stem whose level swings as notes drift in and out of what
+# the model assigns to it. Dividing out a slow loudness envelope evens that up,
+# so a quiet passage produces onsets on the same footing as a loud one.
+GAIN_WINDOW = 1.0
+MAX_GAIN = 15.0
+
+# How far pyin may let the pitch move between frames, in octaves per second.
+# librosa's default of 35.92 leaves room for a jump to a harmonic, which is
+# how a note ends up reported an octave high. Measured on a guitar stem,
+# anything from 5 to 12 removes most of those; below about 4 the pitch track
+# is forced so flat that separate notes merge into one. 8 sits at the loose
+# end of the plateau, leaving room for genuinely fast playing.
+MAX_TRANSITION_RATE = 8.0
 # Ignore the first slice of each segment: pick attacks are broadband noise and
 # confuse the pitch tracker before the string settles.
 ATTACK_SKIP = 0.03
@@ -50,6 +67,10 @@ class DetectedNote:
     degree: str | None = None
     numeral: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "DetectedNote":
+        return cls(**{field: data[field] for field in cls.__dataclass_fields__ if field in data})
+
     def to_dict(self) -> dict:
         data = asdict(self)
         for key in ("time", "duration", "hz", "cents", "confidence"):
@@ -61,6 +82,34 @@ def load_audio(path: Path | str, sample_rate: int | None = None) -> tuple[np.nda
     """Load a clip as a mono float array."""
     y, sr = librosa.load(str(path), sr=sample_rate, mono=True)
     return y, sr
+
+
+def flatten_gain(
+    y: np.ndarray,
+    sr: int,
+    *,
+    window: float = GAIN_WINDOW,
+    max_gain: float = MAX_GAIN,
+) -> np.ndarray:
+    """Even out slow level changes, leaving note attacks intact.
+
+    Divides by a smoothed loudness envelope, so a passage the separator
+    faded down is raised to sit alongside the rest. The window is long
+    compared with a note, so the sudden rise at a pick survives; the gain is
+    capped so near-silence is not amplified into noise.
+    """
+    frame = max(int(window * sr), 1)
+    if y.size < frame:
+        return y
+
+    envelope = np.sqrt(np.convolve(y**2, np.ones(frame) / frame, mode="same"))
+    audible = envelope[envelope > 0]
+    if not audible.size:
+        return y
+
+    reference = float(np.percentile(audible, 70))
+    gain = np.clip(reference / np.maximum(envelope, 1e-9), 1.0 / max_gain, max_gain)
+    return (y * gain).astype(np.float32)
 
 
 def detect_onsets(
@@ -106,13 +155,70 @@ def track_pitch(
     fmin: float = DEFAULT_FMIN,
     fmax: float = DEFAULT_FMAX,
     hop_length: int = DEFAULT_HOP_LENGTH,
+    frame_length: int | None = None,
+    max_transition_rate: float | None = MAX_TRANSITION_RATE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Run pyin over the whole clip. Returns ``(times, f0, voiced_prob)``."""
+    """Run pyin over the whole clip. Returns ``(times, f0, voiced_prob)``.
+
+    ``frame_length`` sets the analysis window: a longer one resolves low
+    notes better, at the cost of blurring fast ones. ``max_transition_rate``
+    caps how far the pitch may move between frames, which is what discourages
+    a spurious jump to a harmonic. Both default to librosa's own values.
+    """
+    tuning = {}
+    if frame_length is not None:
+        tuning["frame_length"] = frame_length
+    if max_transition_rate is not None:
+        tuning["max_transition_rate"] = max_transition_rate
+
     f0, _voiced_flag, voiced_prob = librosa.pyin(
-        y, fmin=fmin, fmax=fmax, sr=sr, hop_length=hop_length
+        y, fmin=fmin, fmax=fmax, sr=sr, hop_length=hop_length, **tuning
     )
     times = librosa.times_like(f0, sr=sr, hop_length=hop_length)
     return times, f0, voiced_prob
+
+
+@dataclass
+class Candidate:
+    """One onset, with what was found there and whether it survived filtering.
+
+    Every onset produces a candidate, including the rejected ones. Keeping
+    the rejects visible is the only way to tell a note the detector never
+    saw from one it saw and threw away.
+    """
+
+    time: float
+    duration: float
+    confidence: float
+    voiced_fraction: float
+    verdict: str  # "kept", "short", "unvoiced", or "low-confidence"
+    hz: float | None = None
+    midi: int | None = None
+    note: str | None = None
+    cents: float | None = None
+
+    @property
+    def kept(self) -> bool:
+        return self.verdict == "kept"
+
+    def to_note(self) -> DetectedNote:
+        return DetectedNote(
+            time=self.time, duration=self.duration, note=self.note, midi=self.midi,
+            hz=self.hz, cents=self.cents, confidence=self.confidence,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "time": round(self.time, 4),
+            "duration": round(self.duration, 4),
+            "note": self.note,
+            "midi": self.midi,
+            "hz": None if self.hz is None else round(self.hz, 4),
+            "cents": None if self.cents is None else round(self.cents, 4),
+            "confidence": round(self.confidence, 4),
+            "voiced_fraction": round(self.voiced_fraction, 4),
+            "verdict": self.verdict,
+        }
 
 
 def _summarize_segment(
@@ -123,8 +229,11 @@ def _summarize_segment(
     voiced_prob: np.ndarray,
     *,
     attack_skip: float = ATTACK_SKIP,
-) -> tuple[float, float] | None:
-    """Median pitch and mean confidence over one segment, or ``None`` if unvoiced."""
+) -> tuple[float, float, float] | None:
+    """Pitch, confidence and voiced fraction over one segment.
+
+    Returns ``None`` when no frame in the segment carried a pitch at all.
+    """
     window_start = start + attack_skip
     if window_start >= end:  # very short segment: use all of it rather than nothing
         window_start = start
@@ -133,10 +242,16 @@ def _summarize_segment(
     voiced = in_window & np.isfinite(f0)
     if not voiced.any():
         return None
-    return float(np.median(f0[voiced])), float(np.mean(voiced_prob[voiced]))
+
+    voiced_fraction = float(voiced.sum() / max(int(in_window.sum()), 1))
+    return (
+        float(np.median(f0[voiced])),
+        float(np.mean(voiced_prob[voiced])),
+        voiced_fraction,
+    )
 
 
-def analyze(
+def candidates(
     y: np.ndarray,
     sr: int,
     *,
@@ -146,43 +261,72 @@ def analyze(
     hop_length: int = DEFAULT_HOP_LENGTH,
     min_duration: float = MIN_DURATION,
     min_confidence: float = MIN_CONFIDENCE,
-) -> list[DetectedNote]:
-    """Run stages 3-5 over loaded audio and return the notes found."""
+    flatten: bool = True,
+    frame_length: int | None = None,
+    max_transition_rate: float | None = MAX_TRANSITION_RATE,
+) -> list[Candidate]:
+    """Every onset with its pitch estimate and the verdict passed on it."""
     duration = len(y) / sr
+    if flatten:
+        y = flatten_gain(y, sr)
     onsets = detect_onsets(y, sr, sensitivity=sensitivity, hop_length=hop_length)
     if len(onsets) == 0:
         return []
 
     times, f0, voiced_prob = track_pitch(
-        y, sr, fmin=fmin, fmax=fmax, hop_length=hop_length
+        y, sr, fmin=fmin, fmax=fmax, hop_length=hop_length,
+        frame_length=frame_length, max_transition_rate=max_transition_rate,
     )
 
-    notes: list[DetectedNote] = []
+    found: list[Candidate] = []
     for start, end in segment_bounds(onsets, duration):
-        if end - start < min_duration:
+        span = end - start
+        if span < min_duration:
+            found.append(Candidate(start, span, 0.0, 0.0, "short"))
             continue
+
         summary = _summarize_segment(start, end, times, f0, voiced_prob)
         if summary is None:
+            found.append(Candidate(start, span, 0.0, 0.0, "unvoiced"))
             continue
-        hz, confidence = summary
-        if confidence < min_confidence:
-            continue
+
+        hz, confidence, voiced_fraction = summary
         midi, name, cents = snap(hz)
-        notes.append(
-            DetectedNote(
-                time=start,
-                duration=end - start,
-                note=name,
-                midi=midi,
-                hz=hz,
-                cents=cents,
-                confidence=confidence,
+        verdict = "kept" if confidence >= min_confidence else "low-confidence"
+        found.append(
+            Candidate(
+                time=start, duration=span, confidence=confidence,
+                voiced_fraction=voiced_fraction, verdict=verdict,
+                hz=hz, midi=midi, note=name, cents=cents,
             )
         )
-    return notes
+    return found
 
 
-def analyze_file(path: Path | str, **kwargs) -> list[DetectedNote]:
+def analyze(y: np.ndarray, sr: int, **kwargs) -> list[DetectedNote]:
+    """Run stages 3-5 over loaded audio and return the notes that survived."""
+    return [c.to_note() for c in candidates(y, sr, **kwargs) if c.kept]
+
+
+def load_notes(path: Path | str) -> tuple[list[DetectedNote], dict | None]:
+    """Read a notes.json written by the analyze stage. Returns ``(notes, key)``."""
+    import json
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [DetectedNote.from_dict(entry) for entry in payload["notes"]], payload.get("key")
+
+
+def analyze_file(
+    path: Path | str, sample_rate: int = ANALYSIS_SAMPLE_RATE, **kwargs
+) -> list[DetectedNote]:
     """Load a clip from disk and analyze it."""
-    y, sr = load_audio(path)
+    y, sr = load_audio(path, sample_rate=sample_rate)
     return analyze(y, sr, **kwargs)
+
+
+def candidates_file(
+    path: Path | str, sample_rate: int = ANALYSIS_SAMPLE_RATE, **kwargs
+) -> list[Candidate]:
+    """Load a clip from disk and report every onset in it."""
+    y, sr = load_audio(path, sample_rate=sample_rate)
+    return candidates(y, sr, **kwargs)

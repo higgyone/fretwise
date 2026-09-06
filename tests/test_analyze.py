@@ -106,6 +106,69 @@ def test_separates_fast_repeated_picking():
 
 
 def test_spans_the_guitar_range():
+    """Every pitch a guitar can produce must be reachable.
+
+    Run with the pitch-transition constraint lifted: this melody leaps an
+    octave between adjacent notes, which the default rate deliberately
+    suppresses (see test_octave_leaps_are_the_cost_of_the_transition_limit).
+    """
     names = ["E2", "A2", "D3", "G3", "B3", "E4", "E5", "E6"]
-    notes = analyze(melody(names, note_duration=0.4, gap=0.08), SR)
+    notes = analyze(
+        melody(names, note_duration=0.4, gap=0.08), SR, max_transition_rate=None
+    )
     assert [n.note for n in notes] == names
+
+
+def test_octave_leaps_are_the_cost_of_the_transition_limit():
+    """Capping the pitch transition rate suppresses real octave leaps too.
+
+    This is the trade the default makes: spurious jumps to a harmonic are
+    far more common in this material than genuine octave leaps between
+    consecutive notes, but the leaps that do occur get flattened.
+    """
+    leaping = melody(["E4", "E5"], note_duration=0.4, gap=0.08)
+
+    constrained = analyze(leaping, SR)
+    assert [n.note for n in constrained] == ["E4", "E4"]  # the leap is flattened
+
+    unconstrained = analyze(leaping, SR, max_transition_rate=None)
+    assert [n.note for n in unconstrained] == ["E4", "E5"]  # and recovered
+
+
+def test_gain_flattening_evens_out_a_fading_signal():
+    """A stem that fades should come back at a consistent level."""
+    from fretwise.analyze import flatten_gain
+
+    y = melody(["A4"] * 8, note_duration=0.4, gap=0.1)
+    fading = (y * np.linspace(1.0, 0.01, len(y))).astype(np.float32)
+
+    flattened = flatten_gain(fading, SR)
+    half = len(flattened) // 2
+
+    def level(chunk):
+        return float(np.sqrt(np.mean(chunk**2)))
+
+    # Before: the second half is under half the level of the first.
+    assert level(fading[half:]) < 0.5 * level(fading[:half])
+    # After: the two halves sit within 20% of each other.
+    assert level(flattened[half:]) > 0.8 * level(flattened[:half])
+
+
+def test_gain_flattening_leaves_silence_alone():
+    from fretwise.analyze import flatten_gain
+
+    assert not flatten_gain(np.zeros(SR, dtype=np.float32), SR).any()
+
+
+def test_gain_flattening_handles_audio_shorter_than_the_window():
+    from fretwise.analyze import flatten_gain
+
+    short = np.ones(100, dtype=np.float32)
+    assert len(flatten_gain(short, SR)) == 100
+
+
+def test_transition_rate_is_constrained_by_default():
+    """The librosa default lets pitch jump to a harmonic; ours does not."""
+    from fretwise.analyze import MAX_TRANSITION_RATE
+
+    assert MAX_TRANSITION_RATE < 35.92
