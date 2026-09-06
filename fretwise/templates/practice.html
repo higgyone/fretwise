@@ -46,6 +46,11 @@
   }
   .chip .deg { color: var(--dim); margin-left: 6px; }
   .hint { color: var(--dim); font-size: 0.8rem; margin-top: 6px; }
+  .warn {
+    background: #3a2a12; border: 1px solid #a9761f; color: #f0c674;
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 0.9rem;
+  }
+  .warn code { color: #ffd9a0; }
 </style>
 </head>
 <body>
@@ -55,6 +60,8 @@
   <span class="spacer"></span>
   <span class="readout" id="clock">0:00.0 / 0:00.0</span>
 </header>
+
+<div class="warn" id="warn" hidden></div>
 
 <div class="panel">
   <svg id="fretboard" viewBox="0 0 1000 260" role="img" aria-label="Guitar fretboard"></svg>
@@ -136,11 +143,18 @@ function drawBoard() {
   }
 }
 
+// Created here but re-appended after the board is drawn: SVG paints in
+// document order, and this group is built before drawBoard() runs, so left
+// where it is the opaque fretboard would cover every dot.
 const dots = make("g", {});
+
+// An open string is marked just inside the nut, on the board itself, rather
+// than off to the side of it: the dot belongs where the eye is already looking.
+const OPEN_X = X0 + 16;
 
 function placeDot(note, isNow) {
   if (note.string === null || note.string === undefined) return;
-  const x = note.fret === 0 ? X0 - 26 : (fretX(note.fret - 1) + fretX(note.fret)) / 2;
+  const x = note.fret === 0 ? OPEN_X : (fretX(note.fret - 1) + fretX(note.fret)) / 2;
   make("circle", {
     cx: x, cy: stringY(note.string), r: isNow ? 13 : 9,
     fill: isNow ? "var(--now)" : "none",
@@ -224,6 +238,45 @@ const audio = new Audio();
 audio.preload = "auto";
 let speed = DATA.defaultSpeed;
 
+// The page is useful without audio: the part can still be read and scrubbed.
+// When the audio cannot load, a clock of our own drives the display so the
+// fretboard still lights up, and the reason is shown rather than left to look
+// like a broken page.
+let audioUsable = true;
+let silentTime = 0;
+let silentPlaying = false;
+let lastTick = null;
+
+audio.addEventListener("error", () => {
+  audioUsable = false;
+  silentPlaying = false;
+  const warn = document.getElementById("warn");
+  warn.hidden = false;
+  warn.innerHTML =
+    "Audio not found. This page needs its <code>" +
+    DATA.speeds.map(entry => entry.file).join("</code>, <code>") +
+    "</code> files in the same folder. Without them the fretboard and " +
+    "timeline still work - press play or drag the timeline to read through " +
+    "the part - but there is no sound.";
+});
+
+function currentTime() {
+  return audioUsable ? toOriginal(audio.currentTime) : silentTime;
+}
+
+function isPlaying() {
+  return audioUsable ? !audio.paused : silentPlaying;
+}
+
+function togglePlay() {
+  if (audioUsable) {
+    if (audio.paused) { audio.play(); } else { audio.pause(); }
+    return;
+  }
+  silentPlaying = !silentPlaying;
+  playButton.textContent = silentPlaying ? "Pause" : "Play";
+}
+
 // The files are pre-stretched, so the audio clock runs slower than the music.
 // Everything on screen works in original time.
 const toOriginal = t => t * speed;
@@ -264,6 +317,10 @@ function loadSpeed(next, keepAt) {
 }
 
 function seek(originalTime) {
+  if (!audioUsable) {
+    silentTime = Math.max(0, Math.min(DATA.duration, originalTime));
+    return;
+  }
   applyTime(originalTime);
 }
 
@@ -285,19 +342,17 @@ for (const value of DATA.speeds.map(entry => entry.speed)) {
 }
 
 const playButton = document.getElementById("play");
-playButton.addEventListener("click", () => {
-  if (audio.paused) { audio.play(); } else { audio.pause(); }
-});
+playButton.addEventListener("click", togglePlay);
 audio.addEventListener("play", () => { playButton.textContent = "Pause"; });
 audio.addEventListener("pause", () => { playButton.textContent = "Play"; });
 
 document.addEventListener("keydown", e => {
   if (e.code === "Space") {
     e.preventDefault();
-    if (audio.paused) { audio.play(); } else { audio.pause(); }
+    togglePlay();
   }
-  if (e.code === "ArrowLeft") seek(Math.max(0, toOriginal(audio.currentTime) - 5));
-  if (e.code === "ArrowRight") seek(toOriginal(audio.currentTime) + 5);
+  if (e.code === "ArrowLeft") seek(Math.max(0, currentTime() - 5));
+  if (e.code === "ArrowRight") seek(currentTime() + 5);
 });
 
 function clock(t) {
@@ -309,7 +364,13 @@ function clock(t) {
 const chips = document.getElementById("nowplaying");
 
 function frame() {
-  const t = toOriginal(audio.currentTime);
+  const now = performance.now();
+  if (!audioUsable && silentPlaying && lastTick !== null) {
+    silentTime = Math.min(DATA.duration, silentTime + (now - lastTick) / 1000);
+  }
+  lastTick = now;
+
+  const t = currentTime();
   if (loopStart !== null && (t >= loopEnd || t < loopStart - 0.25)) seek(loopStart);
 
   const active = DATA.notes.filter(n => n.time <= t && t < n.time + n.duration);
@@ -345,6 +406,7 @@ document.getElementById("keyline").textContent =
            : DATA.notes.length + " notes";
 
 drawBoard();
+board.appendChild(dots);  // on top of the board, not under it
 drawTimeline();
 loadSpeed(DATA.defaultSpeed, 0);
 requestAnimationFrame(frame);

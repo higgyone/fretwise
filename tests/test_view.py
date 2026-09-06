@@ -149,3 +149,34 @@ def test_tuning_and_fret_count_reach_the_page(work):
     data = embedded(page.path.read_text(encoding="utf-8"))
     assert data["maxFret"] == 15
     assert data["tuning"][0] == "E4" and data["tuning"][5] == "E2"
+
+
+def test_the_page_says_so_when_audio_is_missing(work):
+    """Without its .wav files the page looked broken rather than incomplete."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert 'id="warn"' in html
+    assert "Audio not found" in html
+
+
+def test_the_page_still_runs_without_audio(work):
+    """A clock of its own drives the fretboard when the audio cannot load."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert "audioUsable" in html
+    assert "silentPlaying" in html
+    # The display reads the clock through one accessor, not audio directly.
+    assert "function currentTime()" in html
+
+
+def test_dots_are_drawn_on_top_of_the_fretboard(work):
+    """SVG paints in document order; under the board the dots are invisible."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert "board.appendChild(dots)" in html
+    # The re-append has to come after the board is drawn, or it achieves nothing.
+    assert html.index("drawBoard();\nboard.appendChild(dots)") > 0
+
+
+def test_an_open_string_is_marked_on_the_board(work):
+    """Fret 0 belongs just inside the nut, not off to the side of the neck."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert "const OPEN_X = X0 + 16;" in html
+    assert "X0 - 26" not in html
