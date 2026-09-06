@@ -47,3 +47,33 @@ def test_trim_reports_ffmpeg_failure(tmp_path):
     bogus.write_text("this is not audio")
     with pytest.raises(IngestError, match="ffmpeg failed"):
         trim_to_wav(bogus, tmp_path / "clip.wav")
+
+
+def test_a_local_file_is_ingested_without_downloading(tone, tmp_path):
+    """Any audio ffmpeg can read works as input, not just a URL."""
+    from fretwise.ingest import ingest
+
+    clip = ingest(str(tone), work_dir=tmp_path, start=1.0, end=4.0)
+    assert clip.path == tmp_path / "clip.wav"
+    assert clip.title == tone.stem
+    assert clip.duration == pytest.approx(3.0)
+
+    channels, rate, frames = read_wav(clip.path)
+    assert channels == 1
+    assert frames / rate == pytest.approx(3.0, abs=0.05)
+
+
+def test_a_missing_path_is_treated_as_a_url(tmp_path, monkeypatch):
+    """Something that is not a file on disk goes to the downloader."""
+    from fretwise import ingest as ingest_module
+
+    seen = {}
+
+    def fake_download(url, work_dir, *, force=False):
+        seen["url"] = url
+        raise IngestError("download attempted")
+
+    monkeypatch.setattr(ingest_module, "download_audio", fake_download)
+    with pytest.raises(IngestError, match="download attempted"):
+        ingest_module.ingest("https://example.com/watch?v=x", work_dir=tmp_path)
+    assert seen["url"] == "https://example.com/watch?v=x"

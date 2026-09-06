@@ -131,7 +131,7 @@ def trim_to_wav(
 
 
 def ingest(
-    url: str,
+    source: str,
     *,
     work_dir: Path | str = "work",
     start: str | float | None = None,
@@ -139,18 +139,27 @@ def ingest(
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     force: bool = False,
 ) -> Clip:
-    """Run stage 1 end to end: download, trim, normalize."""
+    """Run stage 1 end to end: fetch, trim, normalize.
+
+    ``source`` is either a URL to download or the path of an audio or video
+    file already on disk. A local file skips the download and is trimmed and
+    converted in place, so anything ffmpeg can read works as input.
+    """
     work_dir = Path(work_dir)
     start_s = parse_timestamp(start) or 0.0
     end_s = parse_timestamp(end)
 
-    source, title = download_audio(url, work_dir, force=force)
+    local = Path(source)
+    if local.exists() and local.is_file():
+        source_path, title = local, local.stem
+    else:
+        source_path, title = download_audio(source, work_dir, force=force)
     dest = work_dir / "clip.wav"
-    trim_to_wav(source, dest, start=start_s, end=end_s, sample_rate=sample_rate)
+    trim_to_wav(source_path, dest, start=start_s, end=end_s, sample_rate=sample_rate)
 
     return Clip(
         path=dest,
-        source_url=url,
+        source_url=str(source),
         title=title,
         start=start_s,
         end=end_s,

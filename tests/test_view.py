@@ -171,8 +171,9 @@ def test_dots_are_drawn_on_top_of_the_fretboard(work):
     """SVG paints in document order; under the board the dots are invisible."""
     html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
     assert "board.appendChild(dots)" in html
-    # The re-append has to come after the board is drawn, or it achieves nothing.
-    assert html.index("drawBoard();\nboard.appendChild(dots)") > 0
+    # The re-append has to happen after the board is drawn, or it achieves
+    # nothing. Order is the invariant, not that the two lines are adjacent.
+    assert html.index("board.appendChild(dots)") > html.index("drawBoard();")
 
 
 def test_an_open_string_is_marked_on_the_board(work):
@@ -180,3 +181,61 @@ def test_an_open_string_is_marked_on_the_board(work):
     html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
     assert "const OPEN_X = X0 + 16;" in html
     assert "X0 - 26" not in html
+
+
+def test_confidence_is_shaded_against_this_clip(work):
+    """An absolute threshold would imply certainty the number does not carry."""
+    from fretwise.view import confidence_range
+
+    notes = [note("D3", time=i * 0.5) for i in range(20)]
+    for index, made in enumerate(notes):
+        made.confidence = 0.3 + index * 0.02
+
+    span = confidence_range(notes)
+    assert span["low"] > 0.3 and span["high"] < 0.7  # deciles, not the extremes
+    assert span["low"] < span["high"]
+
+    data = embedded(write_page(notes, work).path.read_text(encoding="utf-8"))
+    assert data["confidence"] == span
+
+
+def test_a_flat_clip_still_gives_a_usable_range():
+    """Identical confidences must not collapse to a zero-width scale."""
+    from fretwise.view import confidence_range
+
+    notes = [note("D3", time=i) for i in range(20)]
+    for made in notes:
+        made.confidence = 0.5
+    span = confidence_range(notes)
+    assert span["high"] > span["low"]
+
+
+def test_confidence_range_survives_a_handful_of_notes():
+    from fretwise.view import confidence_range
+
+    assert confidence_range([note("D3")])["high"] >= confidence_range([note("D3")])["low"]
+    assert confidence_range([]) == {"low": 0.0, "high": 1.0}
+
+
+def test_the_page_shades_dots_by_confidence(work):
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert "function strengthOf(note)" in html
+    assert "fill-opacity" in html
+    assert 'id="legendbar"' in html
+
+
+def test_the_page_can_step_from_note_to_note(work):
+    """Working through a phrase one note at a time, without audio running on."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert "function stepNote(direction)" in html
+    assert 'id="nextnote"' in html and 'id="prevnote"' in html
+    # A strummed chord should cost one step, not one per string.
+    assert "CHORD_WINDOW" in html
+
+
+def test_the_confidence_filter_is_the_players_choice(work):
+    """Nothing in the numbers marks a cut-off, so the default hides nothing."""
+    html = write_page([note("D3")], work).path.read_text(encoding="utf-8")
+    assert 'id="minconf"' in html
+    assert 'value="0"' in html
+    assert "let minStrength = 0;" in html
