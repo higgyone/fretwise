@@ -17,6 +17,7 @@ from .analyze import (
     load_audio, load_notes,
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
+from .cleanup import MAX_HELD_GAP, MAX_SEMITONES_ABOVE, drop_stray_notes, merge_held_notes
 from .key import annotate, estimate_key, in_key_fraction
 from .notes import NoteError, midi_to_hz, name_to_midi
 from .transcribe import (
@@ -79,6 +80,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze_cmd.add_argument(
         "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    analyze_cmd.add_argument(
+        "--held-gap", type=float, default=MAX_HELD_GAP,
+        help="join same-pitch notes closer than this, as one held note "
+             f"(default: {MAX_HELD_GAP}s; 0 disables)",
+    )
+    analyze_cmd.add_argument(
+        "--max-stray", type=int, default=MAX_SEMITONES_ABOVE,
+        help="drop notes this many semitones above the line around them "
+             f"(default: {MAX_SEMITONES_ABOVE}; 0 disables)",
     )
     analyze_cmd.add_argument(
         "--engine", default="basic-pitch", choices=("basic-pitch", "pyin"),
@@ -236,6 +247,18 @@ def run_analyze(args: argparse.Namespace) -> int:
         )
     else:
         notes = analyze_file(clip, **options)
+    if args.held_gap:
+        before = len(notes)
+        notes = merge_held_notes(notes, max_gap=args.held_gap)
+        if before != len(notes):
+            print(f"joined {before - len(notes)} fragments into held notes")
+
+    if args.max_stray:
+        before = len(notes)
+        notes = drop_stray_notes(notes, max_semitones_above=args.max_stray)
+        if before != len(notes):
+            print(f"dropped {before - len(notes)} notes far above the surrounding line")
+
     key = estimate_key(notes)
     annotate(notes, key)
 
