@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ - fretwise</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14161a;
+    --panel: #1c1f26;
+    --edge: #2b3039;
+    --ink: #e6e9ef;
+    --dim: #8b93a3;
+    --wood: #241c16;
+    --string: #6b7280;
+    --now: #ffb347;
+    --soon: #4b6bfb;
+    --loop: rgba(75, 107, 251, 0.18);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 10px; }
+  h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+  .meta { color: var(--dim); font-size: 0.85rem; }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+  svg { display: block; width: 100%; height: auto; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button {
+    font: inherit; color: var(--ink); background: #262b34;
+    border: 1px solid var(--edge); border-radius: 8px;
+    padding: 7px 12px; cursor: pointer; min-height: 40px;
+  }
+  button:hover { background: #2f3540; }
+  button[aria-pressed="true"] { background: var(--soon); border-color: var(--soon); color: #fff; }
+  .spacer { flex: 1 1 auto; }
+  .readout { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 0.85rem; }
+  .now-playing { display: flex; gap: 6px; flex-wrap: wrap; min-height: 32px; align-items: center; }
+  .chip {
+    background: #2b2118; border: 1px solid var(--now); color: var(--now);
+    border-radius: 999px; padding: 3px 10px; font-size: 0.85rem; font-variant-numeric: tabular-nums;
+  }
+  .chip .deg { color: var(--dim); margin-left: 6px; }
+  .hint { color: var(--dim); font-size: 0.8rem; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <span class="meta" id="keyline"></span>
+  <span class="spacer"></span>
+  <span class="readout" id="clock">0:00.0 / 0:00.0</span>
+</header>
+
+<div class="panel">
+  <svg id="fretboard" viewBox="0 0 1000 260" role="img" aria-label="Guitar fretboard"></svg>
+  <div class="now-playing" id="nowplaying"></div>
+</div>
+
+<div class="panel">
+  <svg id="timeline" viewBox="0 0 1000 90" role="img" aria-label="Note timeline"></svg>
+  <div class="hint">Click the timeline to seek. Drag across it to set a loop.</div>
+</div>
+
+<div class="panel controls">
+  <button id="play" aria-label="Play or pause">Play</button>
+  <span id="speeds"></span>
+  <span class="spacer"></span>
+  <button id="loopclear">Clear loop</button>
+  <span class="readout" id="loopreadout">no loop</span>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const DATA = JSON.parse(document.getElementById("data").textContent);
+const STRINGS = 6;
+const FRETS = DATA.maxFret;
+const MARKERS = [3, 5, 7, 9, 15, 17, 19, 21];
+const DOUBLE = [12];
+
+const svgNS = "http://www.w3.org/2000/svg";
+const board = document.getElementById("fretboard");
+const timeline = document.getElementById("timeline");
+
+// Frets narrow towards the bridge as on a real neck, so shapes look familiar.
+const scale = f => 1 - Math.pow(2, -f / 12);
+const X0 = 42, X1 = 980, Y0 = 26, Y1 = 214;
+const fretX = f => X0 + (X1 - X0) * scale(f) / scale(FRETS);
+const stringY = s => Y0 + (Y1 - Y0) * (s - 1) / (STRINGS - 1);
+
+function make(tag, attrs, parent) {
+  const node = document.createElementNS(svgNS, tag);
+  for (const key in attrs) node.setAttribute(key, attrs[key]);
+  (parent || board).appendChild(node);
+  return node;
+}
+
+function drawBoard() {
+  make("rect", {x: X0, y: Y0 - 10, width: X1 - X0, height: Y1 - Y0 + 20, rx: 4, fill: "var(--wood)"});
+  for (const f of MARKERS) {
+    if (f > FRETS) continue;
+    make("circle", {cx: (fretX(f - 1) + fretX(f)) / 2, cy: (Y0 + Y1) / 2, r: 7, fill: "#3a2f26"});
+  }
+  for (const f of DOUBLE) {
+    if (f > FRETS) continue;
+    const x = (fretX(f - 1) + fretX(f)) / 2;
+    make("circle", {cx: x, cy: Y0 + (Y1 - Y0) * 0.28, r: 7, fill: "#3a2f26"});
+    make("circle", {cx: x, cy: Y0 + (Y1 - Y0) * 0.72, r: 7, fill: "#3a2f26"});
+  }
+  for (let f = 0; f <= FRETS; f++) {
+    make("line", {
+      x1: fretX(f), y1: Y0 - 10, x2: fretX(f), y2: Y1 + 10,
+      stroke: f === 0 ? "#cfd4dd" : "#4a5260",
+      "stroke-width": f === 0 ? 6 : 2
+    });
+    if (f > 0) {
+      make("text", {
+        x: (fretX(f - 1) + fretX(f)) / 2, y: Y1 + 32, fill: "var(--dim)",
+        "font-size": 13, "text-anchor": "middle"
+      }).textContent = f;
+    }
+  }
+  for (let s = 1; s <= STRINGS; s++) {
+    make("line", {
+      x1: X0, y1: stringY(s), x2: X1, y2: stringY(s),
+      stroke: "var(--string)", "stroke-width": 1 + (s - 1) * 0.45
+    });
+    make("text", {
+      x: X0 - 12, y: stringY(s) + 4, fill: "var(--dim)",
+      "font-size": 13, "text-anchor": "end"
+    }).textContent = DATA.tuning[s - 1];
+  }
+}
+
+const dots = make("g", {});
+
+function placeDot(note, isNow) {
+  if (note.string === null || note.string === undefined) return;
+  const x = note.fret === 0 ? X0 - 26 : (fretX(note.fret - 1) + fretX(note.fret)) / 2;
+  make("circle", {
+    cx: x, cy: stringY(note.string), r: isNow ? 13 : 9,
+    fill: isNow ? "var(--now)" : "none",
+    stroke: isNow ? "var(--now)" : "var(--soon)",
+    "stroke-width": 2, opacity: isNow ? 1 : 0.75
+  }, dots);
+  if (isNow) {
+    make("text", {
+      x: x, y: stringY(note.string) + 4, "text-anchor": "middle",
+      "font-size": 11, "font-weight": 700, fill: "#1a1206"
+    }, dots).textContent = note.pitchClass;
+  }
+}
+
+function drawDots(active, soon) {
+  while (dots.firstChild) dots.removeChild(dots.firstChild);
+  soon.forEach(n => placeDot(n, false));
+  active.forEach(n => placeDot(n, true));
+}
+
+const TL_W = 1000, TL_H = 90, TL_PAD = 6;
+let loopStart = null, loopEnd = null;
+const midis = DATA.notes.map(n => n.midi);
+const lowest = Math.min.apply(null, midis.concat([40]));
+const highest = Math.max.apply(null, midis.concat([64]));
+const noteY = m => TL_PAD + (TL_H - 2 * TL_PAD) * (1 - (m - lowest) / Math.max(highest - lowest, 1));
+const timeX = t => TL_W * t / DATA.duration;
+
+const loopRect = make("rect", {x: 0, y: 0, width: 0, height: TL_H, fill: "var(--loop)"}, timeline);
+
+function drawTimeline() {
+  for (const n of DATA.notes) {
+    make("rect", {
+      x: timeX(n.time), y: noteY(n.midi) - 2,
+      width: Math.max(timeX(n.duration), 1.5), height: 4, rx: 2,
+      fill: "var(--soon)", opacity: 0.35 + 0.65 * n.confidence
+    }, timeline);
+  }
+}
+
+const cursor = make("line", {y1: 0, y2: TL_H, stroke: "var(--now)", "stroke-width": 2}, timeline);
+
+function timeAt(event) {
+  const box = timeline.getBoundingClientRect();
+  const x = (event.clientX - box.left) / box.width;
+  return Math.max(0, Math.min(DATA.duration, x * DATA.duration));
+}
+
+let dragFrom = null;
+timeline.addEventListener("pointerdown", e => {
+  dragFrom = timeAt(e);
+  timeline.setPointerCapture(e.pointerId);
+});
+timeline.addEventListener("pointermove", e => {
+  if (dragFrom === null) return;
+  const to = timeAt(e);
+  if (Math.abs(to - dragFrom) > 0.15) setLoop(Math.min(dragFrom, to), Math.max(dragFrom, to));
+});
+timeline.addEventListener("pointerup", e => {
+  const to = timeAt(e);
+  if (dragFrom !== null && Math.abs(to - dragFrom) <= 0.15) seek(to);
+  dragFrom = null;
+});
+
+function setLoop(from, to) {
+  loopStart = from;
+  loopEnd = to;
+  loopRect.setAttribute("x", timeX(from));
+  loopRect.setAttribute("width", timeX(to) - timeX(from));
+  document.getElementById("loopreadout").textContent = "loop " + clock(from) + " to " + clock(to);
+}
+
+document.getElementById("loopclear").addEventListener("click", () => {
+  loopStart = null;
+  loopEnd = null;
+  loopRect.setAttribute("width", 0);
+  document.getElementById("loopreadout").textContent = "no loop";
+});
+
+const audio = new Audio();
+audio.preload = "auto";
+let speed = DATA.defaultSpeed;
+
+// The files are pre-stretched, so the audio clock runs slower than the music.
+// Everything on screen works in original time.
+const toOriginal = t => t * speed;
+const fromOriginal = t => t / speed;
+
+function fileFor(value) {
+  const match = DATA.speeds.find(entry => entry.speed === value);
+  if (!match) throw new Error("no rendered audio for speed " + value);
+  return match.file;
+}
+
+// Seeking before the file has its metadata is silently ignored, so a click on
+// the timeline while audio is still loading would do nothing. A request made
+// early is held in one slot until the audio can accept it -- one slot and one
+// listener, so a later request replaces an earlier one instead of the two
+// fighting and the stale one winning.
+let pendingTime = null;
+
+audio.addEventListener("loadedmetadata", () => {
+  if (pendingTime === null) return;
+  audio.currentTime = fromOriginal(pendingTime);
+  pendingTime = null;
+});
+
+function applyTime(originalTime) {
+  // The slot is kept even when the time can be set right away: load() resets
+  // the element and discards a currentTime set just before it finished, so
+  // the metadata handler needs something left to restore.
+  pendingTime = originalTime;
+  if (audio.readyState >= 1) audio.currentTime = fromOriginal(originalTime);
+}
+
+function loadSpeed(next, keepAt) {
+  speed = next;
+  audio.src = fileFor(next);
+  audio.load();
+  applyTime(keepAt);
+}
+
+function seek(originalTime) {
+  applyTime(originalTime);
+}
+
+const speedBox = document.getElementById("speeds");
+for (const value of DATA.speeds.map(entry => entry.speed)) {
+  const button = document.createElement("button");
+  button.textContent = Math.round(value * 100) + "%";
+  button.setAttribute("aria-pressed", String(value === speed));
+  button.addEventListener("click", () => {
+    const at = toOriginal(audio.currentTime);
+    const playing = !audio.paused;
+    loadSpeed(value, at);
+    if (playing) audio.play();
+    const others = speedBox.querySelectorAll("button");
+    for (const other of others) other.setAttribute("aria-pressed", "false");
+    button.setAttribute("aria-pressed", "true");
+  });
+  speedBox.appendChild(button);
+}
+
+const playButton = document.getElementById("play");
+playButton.addEventListener("click", () => {
+  if (audio.paused) { audio.play(); } else { audio.pause(); }
+});
+audio.addEventListener("play", () => { playButton.textContent = "Pause"; });
+audio.addEventListener("pause", () => { playButton.textContent = "Play"; });
+
+document.addEventListener("keydown", e => {
+  if (e.code === "Space") {
+    e.preventDefault();
+    if (audio.paused) { audio.play(); } else { audio.pause(); }
+  }
+  if (e.code === "ArrowLeft") seek(Math.max(0, toOriginal(audio.currentTime) - 5));
+  if (e.code === "ArrowRight") seek(toOriginal(audio.currentTime) + 5);
+});
+
+function clock(t) {
+  const m = Math.floor(t / 60);
+  const s = t - m * 60;
+  return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
+}
+
+const chips = document.getElementById("nowplaying");
+
+function frame() {
+  const t = toOriginal(audio.currentTime);
+  if (loopStart !== null && (t >= loopEnd || t < loopStart - 0.25)) seek(loopStart);
+
+  const active = DATA.notes.filter(n => n.time <= t && t < n.time + n.duration);
+  const soon = DATA.notes.filter(n => n.time > t && n.time < t + 0.4);
+  drawDots(active, soon);
+
+  cursor.setAttribute("x1", timeX(t));
+  cursor.setAttribute("x2", timeX(t));
+  document.getElementById("clock").textContent = clock(t) + " / " + clock(DATA.duration);
+
+  const wanted = active.map(n => n.note + "|" + (n.degree || "")).join(",");
+  if (wanted !== chips.dataset.showing) {
+    chips.dataset.showing = wanted;
+    chips.innerHTML = "";
+    for (const n of active) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = n.note;
+      if (n.degree) {
+        const deg = document.createElement("span");
+        deg.className = "deg";
+        deg.textContent = n.numeral || n.degree;
+        chip.appendChild(deg);
+      }
+      chips.appendChild(chip);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+document.getElementById("keyline").textContent =
+  DATA.key ? DATA.key.name + " - " + DATA.notes.length + " notes"
+           : DATA.notes.length + " notes";
+
+drawBoard();
+drawTimeline();
+loadSpeed(DATA.defaultSpeed, 0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
