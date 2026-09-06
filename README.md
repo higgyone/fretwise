@@ -33,18 +33,42 @@ playable-along-with practice tool.
 
 ## Output format
 
-`notes.json` — one entry per detected note:
+`notes.json` — the estimated key, then one entry per detected note:
 
 ```json
 {
-  "time": 12.34,
-  "duration": 0.42,
-  "note": "E4",
-  "confidence": 0.91,
-  "options": [{"string": 1, "fret": 0}, {"string": 2, "fret": 5}],
-  "chosen": {"string": 1, "fret": 0}
+  "key": {
+    "name": "D major", "tonic": 2, "mode": "major",
+    "fit": 0.70, "margin": 0.18, "in_key": 0.78
+  },
+  "notes": [
+    {
+      "time": 12.34,
+      "duration": 0.42,
+      "note": "E4",
+      "midi": 64,
+      "hz": 329.63,
+      "cents": -4.1,
+      "confidence": 0.91,
+      "degree": "2",
+      "numeral": "ii"
+    }
+  ]
 }
 ```
+
+`degree` is the note's position in the estimated scale (`1`..`7`, with an
+accidental such as `b3` for notes outside it). `numeral` is the Roman numeral
+of the triad built on that degree — `I ii iii IV V vi vii*` in major,
+`i ii* III iv v VI VII` in minor — and is `null` for a chromatic note, which
+has no diatonic triad.
+
+The key is estimated by correlating a pitch-class histogram, weighted by note
+duration and confidence, against the Krumhansl-Kessler profiles. `fit` is that
+correlation, `margin` is how far clear of the runner-up key it is, and
+`in_key` is the share of played time whose pitch belongs to the scale —
+around 0.58 is what random pitches would score, so treat anything near that as
+no better than a guess.
 
 ## Config knobs
 
@@ -65,6 +89,7 @@ playable-along-with practice tool.
 - Stage 1 (ingest) — built: `fretwise ingest <url> --start 1:23 --end 1:41`
 - Stage 2 (separate) — built: `fretwise separate --all`
 - Stages 3-5 (onsets, pitch, note names) — built: `fretwise analyze --separate`
+- Key estimation and scale degrees — built, reported by `fretwise analyze`
 - Stages 6, 7, 8 — not yet built
 
 Run end to end on a real full-band track. Two things to know:

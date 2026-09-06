@@ -46,6 +46,9 @@ class DetectedNote:
     hz: float
     cents: float
     confidence: float
+    # Filled in by fretwise.key.annotate once the key is known.
+    degree: str | None = None
+    numeral: str | None = None
 
     def to_dict(self) -> dict:
         data = asdict(self)

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .analyze import RANGE_PADDING_SEMITONES, analyze_file
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
+from .key import annotate, estimate_key, in_key_fraction
 from .notes import NoteError, midi_to_hz, name_to_midi
 from .separate import (
     DEFAULT_MODEL, DEFAULT_STEM, STEMS, SeparationError, separate, separate_all,
@@ -164,17 +165,37 @@ def run_analyze(args: argparse.Namespace) -> int:
         options["min_confidence"] = args.min_confidence
 
     notes = analyze_file(clip, **options)
+    key = estimate_key(notes)
+    annotate(notes, key)
+
     destination = args.work_dir / "notes.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(
-        json.dumps([note.to_dict() for note in notes], indent=2) + "\n"
-    )
+    payload = {
+        "key": None if key is None else {
+            "name": key.name,
+            "tonic": key.tonic,
+            "mode": key.mode,
+            "fit": round(key.fit, 4),
+            "margin": round(key.margin, 4),
+            "in_key": round(in_key_fraction(notes, key), 4),
+        },
+        "notes": [note.to_dict() for note in notes],
+    }
+    destination.write_text(json.dumps(payload, indent=2) + "\n")
 
     print(f"{len(notes)} notes -> {destination}")
+    if key is not None:
+        print(
+            f"key: {key.name}  (fit {key.fit:.2f}, "
+            f"{100 * in_key_fraction(notes, key):.0f}% of played time in key, "
+            f"{key.margin:.2f} clear of next best)"
+        )
     for note in notes[:10]:
+        degree = f"{note.degree:>3}" if note.degree else "  -"
         print(
             f"  {format_timestamp(note.time)}  {note.note:<4}"
             f"  {note.duration:5.2f}s  conf {note.confidence:.2f}"
+            f"  degree {degree}  {note.numeral or '-'}"
         )
     if len(notes) > 10:
         print(f"  ... and {len(notes) - 10} more")

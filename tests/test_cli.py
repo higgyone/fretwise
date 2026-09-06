@@ -29,9 +29,21 @@ def test_every_subcommand_has_a_handler():
 
 def test_analyze_writes_notes_json(work_dir, capsys):
     assert cli.main(["analyze", "-o", str(work_dir)]) == 0
-    notes = json.loads((work_dir / "notes.json").read_text())
-    assert [n["note"] for n in notes] == ["E4", "G4", "B4"]
+    payload = json.loads((work_dir / "notes.json").read_text())
+    assert [n["note"] for n in payload["notes"]] == ["E4", "G4", "B4"]
     assert "3 notes" in capsys.readouterr().out
+
+
+def test_analyze_reports_a_key_and_degrees(work_dir, capsys):
+    """An E minor triad should be labelled with degrees of some key."""
+    assert cli.main(["analyze", "-o", str(work_dir)]) == 0
+    payload = json.loads((work_dir / "notes.json").read_text())
+
+    assert payload["key"]["mode"] in {"major", "minor"}
+    assert 0 <= payload["key"]["in_key"] <= 1
+    for entry in payload["notes"]:
+        assert entry["degree"] is not None
+    assert "key:" in capsys.readouterr().out
 
 
 def test_analyze_without_a_clip_is_an_error(tmp_path, capsys):

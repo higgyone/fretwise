@@ -85,7 +85,10 @@ def test_segment_bounds_drops_onsets_past_the_end():
 def test_to_dict_rounds_floats(phrase):
     _, y = phrase
     entry = analyze(y, SR)[0].to_dict()
-    assert set(entry) == {"time", "duration", "note", "midi", "hz", "cents", "confidence"}
+    assert set(entry) == {
+        "time", "duration", "note", "midi", "hz", "cents", "confidence",
+        "degree", "numeral",
+    }
     assert entry["note"] == "E4"
     assert isinstance(entry["midi"], int)
 
