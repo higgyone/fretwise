@@ -71,3 +71,36 @@ def test_separate_all_writes_every_stem(tmp_path):
     written = sep.separate_all(tmp_path / "clip.wav", model="htdemucs", out_dir=tmp_path)
     assert set(written) == set(sep.MODEL_STEMS["htdemucs"])
     assert all(path.exists() for path in written.values())
+
+
+def test_energy_share_sums_to_one(tmp_path):
+    from fretwise.separate import energy_share
+
+    loud = tmp_path / "loud.wav"
+    quiet = tmp_path / "quiet.wav"
+    sf.write(loud, np.full(1000, 0.8, dtype="float32"), 22050)
+    sf.write(quiet, np.full(1000, 0.2, dtype="float32"), 22050)
+
+    share = energy_share({"loud": loud, "quiet": quiet})
+    assert sum(share.values()) == pytest.approx(1.0)
+    assert share["loud"] == pytest.approx(0.8)
+
+
+def test_energy_share_is_ordered_loudest_first(tmp_path):
+    from fretwise.separate import energy_share
+
+    for name, level in (("a", 0.1), ("b", 0.9), ("c", 0.5)):
+        sf.write(tmp_path / f"{name}.wav", np.full(500, level, dtype="float32"), 22050)
+    share = energy_share({n: tmp_path / f"{n}.wav" for n in "abc"})
+    assert list(share) == ["b", "c", "a"]
+
+
+def test_energy_share_handles_a_silent_stem(tmp_path):
+    """A stem separation left empty must not divide by zero."""
+    from fretwise.separate import energy_share
+
+    sf.write(tmp_path / "silent.wav", np.zeros(500, dtype="float32"), 22050)
+    sf.write(tmp_path / "sound.wav", np.full(500, 0.5, dtype="float32"), 22050)
+    share = energy_share({n: tmp_path / f"{n}.wav" for n in ("silent", "sound")})
+    assert share["silent"] == 0.0
+    assert share["sound"] == pytest.approx(1.0)

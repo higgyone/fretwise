@@ -29,7 +29,8 @@ from .transcribe import (
     TranscriptionError, transcribe_audio, transcribe_file,
 )
 from .separate import (
-    DEFAULT_MODEL, DEFAULT_STEM, STEMS, SeparationError, separate, separate_all,
+    DEFAULT_MODEL, DEFAULT_STEM, STEMS, SeparationError, energy_share, separate,
+    separate_all,
 )
 from .timestamps import TimestampError, format_timestamp, parse_timestamp
 
@@ -307,8 +308,28 @@ def run_separate(args: argparse.Namespace) -> int:
     clip = resolve_clip(args)
     print(f"separating {clip} with {args.model} (this takes a while on CPU)...")
     if args.all:
-        for name, path in sorted(separate_all(clip, model=args.model, out_dir=args.work_dir).items()):
-            print(f"  {name:7} -> {path}")
+        written = separate_all(clip, model=args.model, out_dir=args.work_dir)
+        share = energy_share(written)
+        for name, path in sorted(written.items()):
+            print(f"  {name:7} {100 * share.get(name, 0):5.1f}%  -> {path}")
+
+        guitar = share.get("guitar", 0.0)
+        bass = share.get("bass", 0.0)
+        if guitar and bass > guitar:
+            print(
+                f"
+  the bass stem holds more than the guitar stem "
+                f"({100*bass:.0f}% against {100*guitar:.0f}%). Separation has no"
+            )
+            print(
+                "  notion of an acoustic guitar, so its low notes are read as"
+                " bass and one"
+            )
+            print(
+                "  part arrives split by where on the neck it was played. Try"
+                " `analyze"
+            )
+            print("  --separate --stems guitar,bass` if notes go missing.")
         return 0
     stem_path = separate(clip, stem=args.stem, model=args.model, out_dir=args.work_dir)
     print(f"{args.stem} stem -> {stem_path}")
