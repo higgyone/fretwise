@@ -18,7 +18,7 @@ from .analyze import (
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
 from .fretboard import DEFAULT_MAX_FRET, map_notes
-from . import tab
+from . import review, tab
 from .stretch import DEFAULT_SPEEDS, StretchError, render_speeds
 from .view import DEFAULT_VIEW_SPEED, ViewError, write_page
 from .cleanup import MAX_HELD_GAP, MAX_SEMITONES_ABOVE, drop_stray_notes, merge_held_notes
@@ -153,6 +153,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_cmd.add_argument("--fmin", default="E2", help="lowest pitch to search for")
     probe_cmd.add_argument("--fmax", default="E6", help="highest pitch to search for")
+
+    review_cmd = subcommands.add_parser(
+        "review", help="hear the least certain notes against the recording"
+    )
+    review_cmd.add_argument(
+        "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    review_cmd.add_argument(
+        "--count", type=int, default=review.DEFAULT_COUNT,
+        help=f"how many of the weakest notes to review (default: {review.DEFAULT_COUNT})",
+    )
+    review_cmd.add_argument(
+        "--below", type=float, default=None,
+        help="review every note under this confidence instead of a fixed count",
+    )
+    review_cmd.add_argument(
+        "--pad", type=float, default=review.PAD,
+        help=f"seconds of recording either side of each note (default: {review.PAD})",
+    )
 
     tab_cmd = subcommands.add_parser(
         "tab", help="write the part as ASCII guitar tablature"
@@ -440,6 +459,28 @@ def load_probe(work_dir: Path) -> list[Candidate]:
     return [Candidate(**entry) for entry in json.loads(path.read_text(encoding="utf-8"))]
 
 
+def run_review(args: argparse.Namespace) -> int:
+    notes_path = args.work_dir / "notes.json"
+    if not notes_path.exists():
+        raise ViewError(f"no notes at {notes_path} - run `fretwise analyze` first")
+
+    notes, _key = load_notes(notes_path)
+    doubtful = review.weakest(notes, count=args.count, below=args.below)
+    if not doubtful:
+        print("no notes matched")
+        return 0
+
+    sr = 22050
+    clip, _ = load_audio(args.work_dir / "clip.wav", sample_rate=sr)
+    audio, items = review.build(clip, sr, doubtful, pad=args.pad)
+    destination = sonify.write(audio, sr, args.work_dir / "review.wav")
+
+    print(review.index(items))
+    print(f"{len(items)} notes, {len(audio) / sr:.0f}s -> {destination}")
+    print("each: the recording around the note, then the note it was read as")
+    return 0
+
+
 def run_tab(args: argparse.Namespace) -> int:
     notes_path = args.work_dir / "notes.json"
     if not notes_path.exists():
@@ -569,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_view(args)
         if args.command == "tab":
             return run_tab(args)
+        if args.command == "review":
+            return run_review(args)
         if args.command == "probe":
             return run_probe(args)
     except (

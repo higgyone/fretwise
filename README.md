@@ -103,6 +103,7 @@ no better than a guess.
 - Stage 8 (practice view) — built: `fretwise view`
 - Confidence highlighting — built, shown on the fretboard dots
 - ASCII tab export — built: `fretwise tab --start 0 --end 40`
+- Re-listening to doubtful notes — built: `fretwise review`
 
 ## Setup
 
@@ -205,7 +206,14 @@ reading the part: the fretboard and timeline run from a clock of their own.
 - **Check by ear.** `fretwise sonify --start 0 --end 40` plays the detected
   notes over the original, which finds gross errors no number reveals.
   `fretwise probe` reports every onset and why it was kept or rejected.
+- **Check the doubtful ones.** `fretwise review` builds a short file that
+  plays, for each of the least certain notes, the recording around it
+  followed by the note it was read as, with an index of where each sits in
+  the original. Whether a quiet note is real is a question for your ear.
 
 ## Roadmap / stretch goals
 
-- Re-listen to a flagged/low-confidence segment in isolation
+All of the original spec and its stretch goals are built. What remains is
+listed under "Known limitations" in the pull requests: the fretboard mapping
+is greedy and only aims to be playable rather than optimal, and a real octave
+doubling still cannot be told from a spurious one by any measurement tried.
