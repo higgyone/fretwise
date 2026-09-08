@@ -134,6 +134,25 @@ def repetitions(notes, period: float) -> int:
     return max(int(round(span / period)), 1)
 
 
+def cluster_positions(entries, tolerance: float):
+    """Group notes of one pitch whose folded positions sit within ``tolerance``.
+
+    Fixed bins split a note that arrives a little early in one repetition from
+    the same note arriving a little late in another, and neither half then
+    looks agreed on. Clustering follows the playing instead of a grid.
+    """
+    clusters: list[list] = []
+    for position, turn, note in sorted(entries):
+        # Measured from where the cluster began, not from its last member:
+        # comparing against the last lets a chain of small steps grow a
+        # cluster without limit, so scattered playing merges into one.
+        if clusters and position - clusters[-1][0][0] <= tolerance:
+            clusters[-1].append((position, turn, note))
+        else:
+            clusters.append([(position, turn, note)])
+    return clusters
+
+
 def consensus(
     notes,
     *,
@@ -144,64 +163,61 @@ def consensus(
 ) -> tuple[list, dict]:
     """The notes most repetitions agree on, as one pass of the figure.
 
+    Agreement counts how many *repetitions* contain the note, not how many
+    times it was played: a pitch struck five times within one bar must not
+    look like five repetitions agreeing.
+
     Returns the notes and a summary: the period, phase, how many repetitions
     were folded, and how strongly the figure repeats at all.
     """
+    empty = {"period": 0.0, "phase": 0.0, "repetitions": 0, "strength": 0.0,
+             "divisions": divisions}
     if not notes:
-        return [], {"period": 0.0, "phase": 0.0, "repetitions": 0, "strength": 0.0}
+        return [], empty
 
     strength = 0.0
     if period is None:
         period, strength = find_period(notes)
     if period <= 0:
-        return [], {"period": 0.0, "phase": 0.0, "repetitions": 0, "strength": 0.0}
+        return [], empty
     if phase is None:
         phase = best_phase(notes, period, divisions=divisions)
 
-    times = defaultdict(list)
-    durations = defaultdict(list)
-    for note in notes:
-        position = ((note.time - phase) % period) / period
-        slot = int(round(position * divisions)) % divisions
-        times[(slot, note.midi)].append(note)
-        durations[(slot, note.midi)].append(note.duration)
-
     total = repetitions(notes, period)
     if total < MIN_REPETITIONS:
-        return [], {
-            "period": round(period, 3), "phase": round(phase, 3),
-            "repetitions": total, "strength": round(strength, 3),
-            "divisions": divisions,
-        }
-    slot_length = period / divisions
+        return [], {"period": round(period, 3), "phase": round(phase, 3),
+                    "repetitions": total, "strength": round(strength, 3),
+                    "divisions": divisions}
 
-    # How often each pitch appears at all, so a slot can be compared with the
-    # scatter chance alone would leave there. A pitch played 40 times across 16
-    # slots averages 2.5 per slot, so 6 landing together means nothing; a pitch
-    # played once per repetition expects well under one, so 12 together means a
-    # great deal. The margin is three standard deviations of that scatter,
-    # treating the arrivals as Poisson.
-    heard_at_all: Counter = Counter(note.midi for note in notes)
+    # Fold every note, remembering which turn of the figure it came from.
+    by_pitch: dict[int, list] = defaultdict(list)
+    for note in notes:
+        elapsed = note.time - phase
+        turn = int(np.floor(elapsed / period))
+        by_pitch[note.midi].append(((elapsed % period) / period, turn, note))
 
+    tolerance = 1.0 / divisions
     kept = []
-    for (slot, midi), heard in sorted(times.items()):
-        share = len(heard) / total
-        by_chance = heard_at_all[midi] / divisions
-        if share < min_share or len(heard) < by_chance + 3 * np.sqrt(by_chance):
-            continue
-        # Keep a real note as the template so nothing is invented, but place
-        # it on the grid and let its confidence carry the agreement.
-        template = max(heard, key=lambda n: n.confidence)
-        kept.append(
-            replace(
-                template,
-                time=round(slot * slot_length, 4),
-                duration=float(np.median(durations[(slot, template.midi)])),
-                confidence=min(share, 1.0),
-                options=None,
-                chosen=None,
+    for _midi, entries in sorted(by_pitch.items()):
+        for cluster in cluster_positions(entries, tolerance):
+            turns = {turn for _pos, turn, _note in cluster}
+            share = len(turns) / total
+            if share < min_share:
+                continue
+
+            heard = [note for _pos, _turn, note in cluster]
+            template = max(heard, key=lambda n: n.confidence)
+            centre = float(np.median([pos for pos, _t, _n in cluster]))
+            kept.append(
+                replace(
+                    template,
+                    time=round(centre * period, 4),
+                    duration=float(np.median([n.duration for n in heard])),
+                    confidence=min(share, 1.0),
+                    options=None,
+                    chosen=None,
+                )
             )
-        )
 
     kept.sort(key=lambda n: (n.time, n.midi))
     return kept, {
