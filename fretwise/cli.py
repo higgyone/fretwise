@@ -18,7 +18,7 @@ from .analyze import (
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
 from .fretboard import DEFAULT_MAX_FRET, map_notes
-from . import review, tab
+from . import pattern, review, tab
 from .stretch import DEFAULT_SPEEDS, StretchError, render_speeds
 from .view import DEFAULT_VIEW_SPEED, ViewError, write_page
 from .cleanup import MAX_HELD_GAP, MAX_SEMITONES_ABOVE, drop_stray_notes, merge_held_notes
@@ -161,6 +161,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_cmd.add_argument("--fmin", default="E2", help="lowest pitch to search for")
     probe_cmd.add_argument("--fmax", default="E6", help="highest pitch to search for")
+
+    pattern_cmd = subcommands.add_parser(
+        "pattern", help="average the repeating figure to its most agreed notes"
+    )
+    pattern_cmd.add_argument(
+        "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    pattern_cmd.add_argument("--start", default=None, help="only from this time")
+    pattern_cmd.add_argument("--end", default=None, help="only up to this time")
+    pattern_cmd.add_argument(
+        "--period", type=float, default=None,
+        help="length of the repeating figure in seconds (found automatically by default)",
+    )
+    pattern_cmd.add_argument(
+        "--divisions", type=int, default=pattern.DIVISIONS,
+        help=f"slots the figure is divided into (default: {pattern.DIVISIONS})",
+    )
+    pattern_cmd.add_argument(
+        "--apply", action="store_true",
+        help="write the agreed figure back over every repetition, so a note "
+             "missed in one is restored from the others and a one-off is "
+             "dropped. Keeps the previous notes.json as notes-before.json",
+    )
+    pattern_cmd.add_argument(
+        "--min-share", type=float, default=pattern.MIN_SHARE,
+        help="how many repetitions must contain a note, 0..1 "
+             f"(default: {pattern.MIN_SHARE})",
+    )
 
     review_cmd = subcommands.add_parser(
         "review", help="hear the least certain notes against the recording"
@@ -521,6 +549,93 @@ def load_probe(work_dir: Path) -> list[Candidate]:
     return [Candidate(**entry) for entry in json.loads(path.read_text(encoding="utf-8"))]
 
 
+def run_pattern(args: argparse.Namespace) -> int:
+    notes_path = args.work_dir / "notes.json"
+    if not notes_path.exists():
+        raise ViewError(f"no notes at {notes_path} - run `fretwise analyze` first")
+
+    notes, key = load_notes(notes_path)
+    start = parse_timestamp(args.start) or 0.0
+    end = parse_timestamp(args.end)
+    chosen = [n for n in notes if n.time >= start and (end is None or n.time < end)]
+    if not chosen:
+        print("no notes in that range")
+        return 0
+
+    found, summary = pattern.consensus(
+        chosen, period=args.period, divisions=args.divisions,
+        min_share=args.min_share,
+    )
+    if not found:
+        print("no figure repeats often enough to average")
+        return 0
+
+    found = map_notes(found, max_fret=DEFAULT_MAX_FRET)
+    agreement = sum(n.confidence for n in found) / len(found)
+    print(
+        f"a figure of {summary['period']:.2f}s repeating about "
+        f"{summary['repetitions']} times"
+        + (f", periodicity {summary['strength']:.2f}" if summary["strength"] else "")
+    )
+    print(
+        f"{len(found)} notes agreed on by at least "
+        f"{100 * args.min_share:.0f}% of repetitions, {100 * agreement:.0f}% average"
+    )
+    if agreement < 0.6:
+        print("that is weak: the playing here may not repeat, or may change")
+
+    print()
+    print(tab.header(found, key, title="the repeating figure, averaged"))
+    print(tab.render(found, seconds_per_column=summary["period"] / args.divisions / 2))
+
+    destination = args.work_dir / "pattern.txt"
+    destination.write_text(
+        tab.header(found, key, title="the repeating figure, averaged")
+        + tab.render(found, seconds_per_column=summary["period"] / args.divisions / 2),
+        encoding="utf-8",
+    )
+    print(f"-> {destination}")
+
+    if args.apply:
+        rebuilt, stats = pattern.apply_to_timeline(
+            notes, found, summary, start=start, end=end
+        )
+        rebuilt = map_notes(rebuilt, max_fret=DEFAULT_MAX_FRET)
+        new_key = estimate_key(rebuilt)
+        annotate(rebuilt, new_key)
+
+        before = args.work_dir / "notes-before.json"
+        before.write_text(notes_path.read_text(encoding="utf-8"), encoding="utf-8")
+        notes_path.write_text(
+            json.dumps(
+                {
+                    "key": None if new_key is None else {
+                        "name": new_key.name, "tonic": new_key.tonic,
+                        "mode": new_key.mode, "fit": round(new_key.fit, 4),
+                        "margin": round(new_key.margin, 4),
+                        "in_key": round(in_key_fraction(rebuilt, new_key), 4),
+                    },
+                    "notes": [n.to_dict() for n in rebuilt],
+                },
+                indent=2,
+            )
+            + chr(10),
+            encoding="utf-8",
+        )
+        print()
+        print(
+            f"applied: {stats['replaced']} notes in that range became "
+            f"{stats['rebuilt']}"
+        )
+        if new_key:
+            print(
+                f"key now {new_key.name}, "
+                f"{100 * in_key_fraction(rebuilt, new_key):.0f}% of played time in key"
+            )
+        print(f"previous notes kept at {before}")
+    return 0
+
+
 def run_review(args: argparse.Namespace) -> int:
     notes_path = args.work_dir / "notes.json"
     if not notes_path.exists():
@@ -679,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_tab(args)
         if args.command == "review":
             return run_review(args)
+        if args.command == "pattern":
+            return run_pattern(args)
         if args.command == "probe":
             return run_probe(args)
     except (
