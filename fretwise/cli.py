@@ -179,6 +179,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"slots the figure is divided into (default: {pattern.DIVISIONS})",
     )
     pattern_cmd.add_argument(
+        "--apply", action="store_true",
+        help="write the agreed figure back over every repetition, so a note "
+             "missed in one is restored from the others and a one-off is "
+             "dropped. Keeps the previous notes.json as notes-before.json",
+    )
+    pattern_cmd.add_argument(
         "--min-share", type=float, default=pattern.MIN_SHARE,
         help="how many repetitions must contain a note, 0..1 "
              f"(default: {pattern.MIN_SHARE})",
@@ -589,6 +595,44 @@ def run_pattern(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     print(f"-> {destination}")
+
+    if args.apply:
+        rebuilt, stats = pattern.apply_to_timeline(
+            notes, found, summary, start=start, end=end
+        )
+        rebuilt = map_notes(rebuilt, max_fret=DEFAULT_MAX_FRET)
+        new_key = estimate_key(rebuilt)
+        annotate(rebuilt, new_key)
+
+        before = args.work_dir / "notes-before.json"
+        before.write_text(notes_path.read_text(encoding="utf-8"), encoding="utf-8")
+        notes_path.write_text(
+            json.dumps(
+                {
+                    "key": None if new_key is None else {
+                        "name": new_key.name, "tonic": new_key.tonic,
+                        "mode": new_key.mode, "fit": round(new_key.fit, 4),
+                        "margin": round(new_key.margin, 4),
+                        "in_key": round(in_key_fraction(rebuilt, new_key), 4),
+                    },
+                    "notes": [n.to_dict() for n in rebuilt],
+                },
+                indent=2,
+            )
+            + chr(10),
+            encoding="utf-8",
+        )
+        print()
+        print(
+            f"applied: {stats['replaced']} notes in that range became "
+            f"{stats['rebuilt']}"
+        )
+        if new_key:
+            print(
+                f"key now {new_key.name}, "
+                f"{100 * in_key_fraction(rebuilt, new_key):.0f}% of played time in key"
+            )
+        print(f"previous notes kept at {before}")
     return 0
 
 

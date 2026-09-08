@@ -33,7 +33,9 @@ MIN_PERIOD = 1.0
 MAX_PERIOD = 12.0
 # Resolution of the search, and of the folded grid.
 SEARCH_STEP = 0.05
-DIVISIONS = 16
+# Slots per figure. At 16 a six second figure gives slots of 0.4s, coarser
+# than the playing, and several notes of one repetition fall in the same one.
+DIVISIONS = 32
 # How many repetitions must contain a note before it is believed.
 MIN_SHARE = 0.4
 # Averaging needs something to average. Agreement across two passes says
@@ -209,3 +211,69 @@ def consensus(
         "strength": round(strength, 3),
         "divisions": divisions,
     }
+
+
+def apply_to_timeline(
+    notes,
+    figure: list,
+    summary: dict,
+    *,
+    start: float | None = None,
+    end: float | None = None,
+) -> tuple[list, dict]:
+    """Play the agreed figure at every repetition, in place of what was read.
+
+    This is the point of averaging: a note the transcription missed in one
+    repetition is restored from the others, and a note it invented once is
+    dropped. It also flattens any real variation between repetitions, so it
+    is worth only where the playing genuinely repeats -- which is what the
+    agreement figure is for.
+
+    Notes outside the range are left exactly as they were.
+    """
+    period = summary.get("period", 0.0)
+    if period <= 0 or not figure:
+        return list(notes), {"replaced": 0, "added": 0, "removed": 0}
+
+    inside = [n for n in notes if _within(n, start, end)]
+    outside = [n for n in notes if not _within(n, start, end)]
+    if not inside:
+        return list(notes), {"replaced": 0, "added": 0, "removed": 0}
+
+    first = min(n.time for n in inside)
+    last = max(n.time for n in inside)
+    phase = summary.get("phase", 0.0)
+
+    # Start at the first whole repetition at or before the earliest note.
+    turns = int(np.floor((first - phase) / period))
+    rebuilt = []
+    while phase + turns * period <= last:
+        origin = phase + turns * period
+        for note in figure:
+            at = origin + note.time
+            if at < first - period or at > last + period:
+                continue
+            if not _within_time(at, start, end):
+                continue
+            rebuilt.append(replace(note, time=round(at, 4), options=None, chosen=None))
+        turns += 1
+
+    rebuilt.sort(key=lambda n: (n.time, n.midi))
+    return sorted(outside + rebuilt, key=lambda n: (n.time, n.midi)), {
+        "replaced": len(inside),
+        "added": max(len(rebuilt) - len(inside), 0),
+        "removed": max(len(inside) - len(rebuilt), 0),
+        "rebuilt": len(rebuilt),
+    }
+
+
+def _within(note, start, end) -> bool:
+    return _within_time(note.time, start, end)
+
+
+def _within_time(at: float, start, end) -> bool:
+    if start is not None and at < start:
+        return False
+    if end is not None and at >= end:
+        return False
+    return True

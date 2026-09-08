@@ -136,3 +136,54 @@ def test_positions_are_cleared_so_they_are_mapped_afresh():
         n.chosen = {"string": 6, "fret": 12}
     found, _summary = pattern.consensus(played, period=2.0)
     assert all(n.chosen is None for n in found)
+
+
+def test_applying_restores_a_note_missed_in_one_repetition():
+    """The whole point: what the other repetitions saw fills the gap."""
+    played = looping(FIGURE, 2.0, 8)
+    played = [n for n in played if not (n.note == "A3" and 6.0 <= n.time < 8.0)]
+    assert sum(1 for n in played if n.note == "A3") == 7
+
+    figure, summary = pattern.consensus(played, period=2.0)
+    rebuilt, _stats = pattern.apply_to_timeline(played, figure, summary)
+    assert sum(1 for n in rebuilt if n.note == "A3") == 8
+
+
+def test_applying_drops_a_note_played_only_once():
+    played = looping(FIGURE, 2.0, 8)
+    played.append(note("C5", 5.1))
+    figure, summary = pattern.consensus(played, period=2.0)
+    rebuilt, _stats = pattern.apply_to_timeline(played, figure, summary)
+    assert "C5" not in {n.note for n in rebuilt}
+
+
+def test_applying_leaves_notes_outside_the_range_alone():
+    played = looping(FIGURE, 2.0, 8)
+    elsewhere = note("G5", 40.0)
+    figure, summary = pattern.consensus(played, period=2.0)
+    rebuilt, _stats = pattern.apply_to_timeline(
+        played + [elsewhere], figure, summary, start=0.0, end=16.0
+    )
+    assert "G5" in {n.note for n in rebuilt}
+
+
+def test_applying_nothing_changes_nothing():
+    played = looping(FIGURE, 2.0, 8)
+    rebuilt, stats = pattern.apply_to_timeline(played, [], {"period": 0.0})
+    assert len(rebuilt) == len(played)
+    assert stats["replaced"] == 0
+
+
+def test_applying_reports_what_it_did():
+    played = looping(FIGURE, 2.0, 8)
+    figure, summary = pattern.consensus(played, period=2.0)
+    _rebuilt, stats = pattern.apply_to_timeline(played, figure, summary)
+    assert stats["replaced"] == len(played)
+    assert stats["rebuilt"] > 0
+
+
+def test_applied_notes_are_positioned_afresh():
+    played = looping(FIGURE, 2.0, 8)
+    figure, summary = pattern.consensus(played, period=2.0)
+    rebuilt, _stats = pattern.apply_to_timeline(played, figure, summary)
+    assert all(n.chosen is None for n in rebuilt)
