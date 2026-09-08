@@ -127,26 +127,73 @@ def test_map_notes_with_no_notes():
     assert map_notes([]) == []
 
 
-def test_a_note_does_not_take_the_string_a_coming_note_needs():
-    """D3 has three homes; G2 has only string 6. D3 must leave it free."""
-    line = [note("D3", 0.0, duration=1.5), note("G2", 0.5, duration=0.5)]
+def test_a_note_takes_a_string_that_is_still_ringing():
+    """Fretting a string stops it, so a low note is not pushed up the neck.
+
+    D3 can be played in three places; G2 only on the low E. With the low E
+    ringing, D3 belongs on the open D string, not at the tenth fret.
+    """
+    line = [note("G2", 0.0, duration=3.0), note("D3", 0.5, duration=0.5)]
     mapped = map_notes(line)
     by_name = {n.note: n.chosen for n in mapped}
     assert by_name["G2"] == {"string": 6, "fret": 3}
-    assert by_name["D3"]["string"] != 6
+    assert by_name["D3"] == {"string": 4, "fret": 0}
 
 
-def test_reserving_does_not_block_a_note_with_nowhere_else():
-    """If only the reserved string is left, take it rather than give up."""
-    line = [note("E2", 0.0, duration=1.0), note("E2", 0.5, duration=0.5)]
-    mapped = map_notes(line)
-    # The first gets string 6; the second overlaps and genuinely cannot be played.
-    assert mapped[0].chosen == {"string": 6, "fret": 0}
-    assert mapped[1].chosen is None
+def test_the_note_that_loses_its_string_is_shortened():
+    """It cannot still be sounding once the string has been refretted."""
+    line = [note("E2", 0.0, duration=3.0), note("F2", 1.0, duration=0.5)]
+    stats: dict = {}
+    mapped = map_notes(line, stats=stats)
+
+    held = next(n for n in mapped if n.note == "E2")
+    assert held.duration == pytest.approx(1.0)  # cut where the next note starts
+    assert stats["shortened"] == 1
+    assert stats["unplaced"] == 0
 
 
-def test_lookahead_ignores_notes_starting_after_this_one_ends():
-    from fretwise.fretboard import strings_needed_soon
+def test_a_free_string_is_preferred_to_taking_a_ringing_one():
+    """Stealing is a cost, not a first resort."""
+    line = [note("D3", 0.0, duration=3.0), note("D3", 1.0, duration=0.5)]
+    stats: dict = {}
+    mapped = map_notes(line, stats=stats)
+    # The second D3 has other homes, so the first keeps its string and length.
+    assert stats["shortened"] == 0
+    assert mapped[0].duration == pytest.approx(3.0)
+    assert mapped[0].chosen != mapped[1].chosen
 
-    line = [note("D3", 0.0, duration=0.2), note("G2", 5.0, duration=0.5)]
-    assert strings_needed_soon(line, 0) == set()
+
+def test_a_chord_does_not_steal_from_itself():
+    """Notes of one chord divide the strings; they do not cut each other off."""
+    chord = [note("E2", 0.0, duration=2.0), note("E3", 0.01, duration=2.0)]
+    stats: dict = {}
+    mapped = map_notes(chord, stats=stats)
+    assert stats["shortened"] == 0
+    assert all(n.chosen for n in mapped)
+    assert mapped[0].chosen["string"] != mapped[1].chosen["string"]
+    assert all(n.duration == pytest.approx(2.0) for n in mapped)
+
+
+def test_a_higher_steal_cost_keeps_notes_ringing_longer():
+    line = [note("G2", 0.0, duration=3.0), note("D3", 0.5, duration=0.5)]
+    reluctant: dict = {}
+    map_notes([note("G2", 0.0, duration=3.0), note("D3", 0.5, duration=0.5)],
+              steal_cost=99, stats=reluctant)
+    assert reluctant["shortened"] == 0
+
+
+def test_group_chords_splits_on_the_window():
+    from fretwise.fretboard import group_chords
+
+    notes = [note("D3", 0.0), note("A3", 0.02), note("E3", 1.0)]
+    groups = group_chords(notes)
+    assert [len(g) for g in groups] == [2, 1]
+
+
+def test_map_notes_returns_notes_in_time_order():
+    mapped = map_notes([note("D3", 1.0), note("A3", 0.0)])
+    assert [n.time for n in mapped] == [0.0, 1.0]
+
+
+def test_map_notes_with_no_notes():
+    assert map_notes([]) == []

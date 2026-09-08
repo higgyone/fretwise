@@ -328,10 +328,15 @@ def run_analyze(args: argparse.Namespace) -> int:
 
     key = estimate_key(notes)
     annotate(notes, key)
-    notes = map_notes(notes, max_fret=args.max_fret)
-    unplayable = sum(1 for n in notes if n.chosen is None)
-    if unplayable:
-        print(f"{unplayable} notes could not be given a string of their own")
+    mapping: dict = {}
+    notes = map_notes(notes, max_fret=args.max_fret, stats=mapping)
+    if mapping.get("shortened"):
+        print(
+            f"{mapping['shortened']} notes shortened where a later note "
+            "needed their string"
+        )
+    if mapping.get("unplaced"):
+        print(f"{mapping['unplaced']} notes could not be given a string at all")
 
     destination = args.work_dir / "notes.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
