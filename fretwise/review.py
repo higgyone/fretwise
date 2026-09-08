@@ -1,10 +1,10 @@
 """Re-listening to the notes least worth trusting.
 
 Confidence says which notes the transcription is least sure of, but a number
-cannot say whether a note is right. This builds a short audio file that plays,
-for each doubtful note, the recording around it followed by the note it was
-read as -- so the two can be compared by ear, which is the only thing that
-settles it.
+cannot say whether a note is right. This cuts the recording down to just those
+moments, with the transcription played over them exactly as `sonify` does --
+the same thing to listen for, without scrubbing through the whole clip to
+find the eight places worth checking.
 
 The recording is normalised segment by segment, because low confidence and
 low volume tend to arrive together and the passage in question is often the
@@ -71,18 +71,19 @@ def build(
     sr: int,
     notes,
     *,
+    context: list | None = None,
     pad: float = PAD,
     gap: float = GAP,
     separation: float = SEPARATION,
 ) -> tuple[np.ndarray, list[Item]]:
-    """Build the review audio. Returns the audio and where each note lands.
+    """Cut the recording down to the doubtful moments, notes played over it.
 
-    Each note is heard twice: the recording alone, then the same recording
-    with the note played over it. Judging a short tone against a passage
-    heard a second earlier is guesswork; hearing them together, a wrong
-    pitch beats against the recording and is unmistakable.
+    ``context`` is every note in the piece, so that whatever else is sounding
+    in a window is heard too: a note judged in isolation from the rest of the
+    playing is no easier to judge than one heard out of time.
     """
     silence = lambda seconds: np.zeros(max(int(seconds * sr), 0), dtype=np.float32)
+    context = list(context if context is not None else notes)
 
     pieces: list[np.ndarray] = []
     items: list[Item] = []
@@ -90,27 +91,26 @@ def build(
 
     for note in notes:
         start = note.time - pad
-        heard = excerpt(clip, sr, start, note.time + note.duration + pad)
+        finish = note.time + note.duration + pad
+        heard = excerpt(clip, sr, start, finish)
         if not heard.size:
             continue
-        # Each excerpt is levelled on its own: a doubtful note is often the
-        # quietest passage on the clip, and would be inaudible beside the rest.
-        heard = normalize(heard, headroom=0.85)
 
-        # These notes are often a tenth of a second long, too brief to hear as
-        # a pitch, so the reference is held long enough to judge.
-        length = min(max(note.duration, MIN_TONE), MAX_TONE)
-        tone = synth_note(note.hz, length, sr)
-
-        together = heard.copy()
-        at = int((note.time - start) * sr)
-        end = min(at + len(tone), len(together))
-        if end > at:
-            together[at:end] += tone[: end - at] * 0.55
-        together = normalize(together, headroom=0.9)
+        # Levelled window by window: a doubtful note is often the quietest
+        # passage on the clip and would otherwise be inaudible.
+        window = normalize(heard, headroom=0.7).copy()
+        for other in context:
+            if other.time >= finish or other.time + other.duration <= start:
+                continue
+            length = min(max(other.duration, MIN_TONE), MAX_TONE)
+            tone = synth_note(other.hz, length, sr)
+            at = int((other.time - start) * sr)
+            first, last = max(at, 0), min(at + len(tone), len(window))
+            if last > first:
+                window[first:last] += tone[first - at : last - at] * 0.5
 
         items.append(Item(note=note, at=position))
-        for piece in (heard, silence(gap), together, silence(separation)):
+        for piece in (normalize(window, headroom=0.95), silence(separation)):
             pieces.append(piece)
             position += len(piece) / sr
 

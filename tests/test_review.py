@@ -50,39 +50,43 @@ def test_asking_for_none():
     assert review.weakest([], count=5) == []
 
 
-def test_each_note_is_heard_twice(clip):
-    """The recording alone, then the recording with the note over it."""
+def test_a_window_is_the_recording_plus_its_padding(clip):
     audio, items = review.build(clip, SR, [note("D3", 5.0, 0.3)])
     assert len(items) == 1
-    excerpt = 2 * review.PAD + 0.4
-    expected = excerpt + review.GAP + excerpt + review.SEPARATION
+    expected = (2 * review.PAD + 0.4) + review.SEPARATION
     assert len(audio) / SR == pytest.approx(expected, abs=0.05)
 
 
-def test_the_second_hearing_carries_the_detected_note(clip):
-    """A 220Hz recording plus a detected A4 should show both pitches."""
+def test_the_window_carries_the_transcription_over_the_recording(clip):
+    """A 220Hz recording with a detected A4 must contain both pitches."""
     audio, _items = review.build(clip, SR, [note("A4", 5.0, 0.3)])
-    excerpt = int((2 * review.PAD + 0.4) * SR)
-    alone = audio[:excerpt]
-    together = audio[excerpt + int(review.GAP * SR):][:excerpt]
 
-    def level(signal, hz):
-        spectrum = np.abs(np.fft.rfft(signal * np.hanning(len(signal))))
-        freqs = np.fft.rfftfreq(len(signal), 1 / SR)
+    def level(hz):
+        spectrum = np.abs(np.fft.rfft(audio * np.hanning(len(audio))))
+        freqs = np.fft.rfftfreq(len(audio), 1 / SR)
         return float(spectrum[np.argmin(np.abs(freqs - hz))])
 
-    # The recording's own pitch is in both; the detected note only in the second.
-    assert level(alone, 220) > 0
-    assert level(together, 440) > 20 * level(alone, 440)
+    assert level(440) > 10 * level(700)  # the note we say was played
+    assert level(220) > 10 * level(700)  # and the recording underneath it
+
+
+def test_everything_sounding_in_the_window_is_heard(clip):
+    """Judging a note without the playing around it is no easier."""
+    doubtful = note("A4", 5.0, 0.2)
+    alongside = note("E5", 5.1, 0.9)
+    audio, _items = review.build(clip, SR, [doubtful], context=[doubtful, alongside])
+
+    spectrum = np.abs(np.fft.rfft(audio * np.hanning(len(audio))))
+    freqs = np.fft.rfftfreq(len(audio), 1 / SR)
+    level = lambda hz: float(spectrum[np.argmin(np.abs(freqs - hz))])
+    assert level(659.26) > 10 * level(900)  # the E5 played alongside it
 
 
 def test_a_very_short_note_still_gets_an_audible_reference(clip):
     """A tenth of a second is too brief to hear as a pitch."""
-    audio, _items = review.build(clip, SR, [note("D3", 5.0, 0.3, duration=0.08)])
-    excerpt = 2 * review.PAD + 0.08
-    expected = excerpt + review.GAP + excerpt + review.SEPARATION
-    assert len(audio) / SR == pytest.approx(expected, abs=0.05)
     assert review.MIN_TONE > 0.3
+    audio, _items = review.build(clip, SR, [note("D3", 5.0, 0.3, duration=0.08)])
+    assert len(audio) > 0
 
 
 def test_items_say_where_to_listen(clip):

@@ -480,13 +480,13 @@ def run_review(args: argparse.Namespace) -> int:
     stem = args.work_dir / f"clip-{DEFAULT_STEM}.wav"
     source = stem if args.source == "stem" and stem.exists() else args.work_dir / "clip.wav"
     clip, _ = load_audio(source, sample_rate=sr)
-    audio, items = review.build(clip, sr, doubtful, pad=args.pad)
+    audio, items = review.build(clip, sr, doubtful, context=notes, pad=args.pad)
     destination = sonify.write(audio, sr, args.work_dir / "review.wav")
 
     print(review.index(items))
     print(f"{len(items)} notes from {source.name}, {len(audio) / sr:.0f}s -> {destination}")
-    print("each note twice: the recording alone, then the same with the")
-    print("detected note played over it - a wrong pitch beats against it")
+    print("the recording at each doubtful moment, with the transcription")
+    print("played over it, exactly as `fretwise sonify` does")
     return 0
 
 
