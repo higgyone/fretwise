@@ -316,20 +316,22 @@ def run_separate(args: argparse.Namespace) -> int:
         guitar = share.get("guitar", 0.0)
         bass = share.get("bass", 0.0)
         if guitar and bass > guitar:
+            print()
             print(
-                f"
-  the bass stem holds more than the guitar stem "
-                f"({100*bass:.0f}% against {100*guitar:.0f}%). Separation has no"
+                f"  the bass stem holds more than the guitar stem "
+                f"({100 * bass:.0f}% against {100 * guitar:.0f}%). Separation"
             )
             print(
-                "  notion of an acoustic guitar, so its low notes are read as"
-                " bass and one"
+                "  has no notion of an acoustic guitar, so its low notes read"
+                " as bass and"
             )
             print(
-                "  part arrives split by where on the neck it was played. Try"
-                " `analyze"
+                "  one part arrives split by where on the neck it was played."
             )
-            print("  --separate --stems guitar,bass` if notes go missing.")
+            print(
+                "  Try `analyze --separate --stems guitar,bass` if notes go"
+                " missing."
+            )
         return 0
     stem_path = separate(clip, stem=args.stem, model=args.model, out_dir=args.work_dir)
     print(f"{args.stem} stem -> {stem_path}")

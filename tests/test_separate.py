@@ -83,7 +83,7 @@ def test_energy_share_sums_to_one(tmp_path):
 
     share = energy_share({"loud": loud, "quiet": quiet})
     assert sum(share.values()) == pytest.approx(1.0)
-    assert share["loud"] == pytest.approx(0.8)
+    assert share["loud"] == pytest.approx(0.8, abs=1e-3)  # float32 rounding
 
 
 def test_energy_share_is_ordered_loudest_first(tmp_path):
