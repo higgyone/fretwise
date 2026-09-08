@@ -169,6 +169,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="review every note under this confidence instead of a fixed count",
     )
     review_cmd.add_argument(
+        "--source", default="stem", choices=("stem", "mix"),
+        help="listen to the separated guitar (default) or the whole mix",
+    )
+    review_cmd.add_argument(
         "--pad", type=float, default=review.PAD,
         help=f"seconds of recording either side of each note (default: {review.PAD})",
     )
@@ -471,13 +475,18 @@ def run_review(args: argparse.Namespace) -> int:
         return 0
 
     sr = 22050
-    clip, _ = load_audio(args.work_dir / "clip.wav", sample_rate=sr)
+    # The stem is what the transcriber actually heard, and a reference tone is
+    # far easier to judge against one instrument than against the whole band.
+    stem = args.work_dir / f"clip-{DEFAULT_STEM}.wav"
+    source = stem if args.source == "stem" and stem.exists() else args.work_dir / "clip.wav"
+    clip, _ = load_audio(source, sample_rate=sr)
     audio, items = review.build(clip, sr, doubtful, pad=args.pad)
     destination = sonify.write(audio, sr, args.work_dir / "review.wav")
 
     print(review.index(items))
-    print(f"{len(items)} notes, {len(audio) / sr:.0f}s -> {destination}")
-    print("each: the recording around the note, then the note it was read as")
+    print(f"{len(items)} notes from {source.name}, {len(audio) / sr:.0f}s -> {destination}")
+    print("each note twice: the recording alone, then the same with the")
+    print("detected note played over it - a wrong pitch beats against it")
     return 0
 
 

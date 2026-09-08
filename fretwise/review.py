@@ -27,6 +27,9 @@ GAP = 0.2
 SEPARATION = 0.7
 # A reference tone longer than this outstays its welcome.
 MAX_TONE = 1.2
+# A doubtful note often lasts a tenth of a second, which is too brief to hear
+# as a pitch at all. The reference is stretched to at least this.
+MIN_TONE = 0.4
 DEFAULT_COUNT = 10
 
 
@@ -72,7 +75,13 @@ def build(
     gap: float = GAP,
     separation: float = SEPARATION,
 ) -> tuple[np.ndarray, list[Item]]:
-    """Build the review audio. Returns the audio and where each note lands."""
+    """Build the review audio. Returns the audio and where each note lands.
+
+    Each note is heard twice: the recording alone, then the same recording
+    with the note played over it. Judging a short tone against a passage
+    heard a second earlier is guesswork; hearing them together, a wrong
+    pitch beats against the recording and is unmistakable.
+    """
     silence = lambda seconds: np.zeros(max(int(seconds * sr), 0), dtype=np.float32)
 
     pieces: list[np.ndarray] = []
@@ -80,16 +89,28 @@ def build(
     position = 0.0
 
     for note in notes:
-        heard = excerpt(clip, sr, note.time - pad, note.time + note.duration + pad)
+        start = note.time - pad
+        heard = excerpt(clip, sr, start, note.time + note.duration + pad)
         if not heard.size:
             continue
         # Each excerpt is levelled on its own: a doubtful note is often the
         # quietest passage on the clip, and would be inaudible beside the rest.
         heard = normalize(heard, headroom=0.85)
-        tone = synth_note(note.hz, min(note.duration, MAX_TONE), sr) * 0.7
+
+        # These notes are often a tenth of a second long, too brief to hear as
+        # a pitch, so the reference is held long enough to judge.
+        length = min(max(note.duration, MIN_TONE), MAX_TONE)
+        tone = synth_note(note.hz, length, sr)
+
+        together = heard.copy()
+        at = int((note.time - start) * sr)
+        end = min(at + len(tone), len(together))
+        if end > at:
+            together[at:end] += tone[: end - at] * 0.55
+        together = normalize(together, headroom=0.9)
 
         items.append(Item(note=note, at=position))
-        for piece in (heard, silence(gap), tone, silence(separation)):
+        for piece in (heard, silence(gap), together, silence(separation)):
             pieces.append(piece)
             position += len(piece) / sr
 
