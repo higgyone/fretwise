@@ -179,6 +179,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"slots the figure is divided into (default: {pattern.DIVISIONS})",
     )
     pattern_cmd.add_argument(
+        "--every", type=float, default=None, metavar="SECONDS",
+        help="average the whole range in sections of this length, each with "
+             f"its own figure (try {pattern.SECTION}). A song does not repeat "
+             "one figure throughout",
+    )
+    pattern_cmd.add_argument(
+        "--min-agreement", type=float, default=pattern.MIN_AGREEMENT,
+        help="leave a section alone below this much agreement "
+             f"(default: {pattern.MIN_AGREEMENT})",
+    )
+    pattern_cmd.add_argument(
         "--apply", action="store_true",
         help="write the agreed figure back over every repetition, so a note "
              "missed in one is restored from the others and a one-off is "
@@ -549,6 +560,65 @@ def load_probe(work_dir: Path) -> list[Candidate]:
     return [Candidate(**entry) for entry in json.loads(path.read_text(encoding="utf-8"))]
 
 
+def write_notes(path: Path, notes) -> None:
+    """Write notes.json with the key re-estimated for what is now there."""
+    key = estimate_key(notes)
+    annotate(notes, key)
+    path.write_text(
+        json.dumps(
+            {
+                "key": None if key is None else {
+                    "name": key.name, "tonic": key.tonic, "mode": key.mode,
+                    "fit": round(key.fit, 4), "margin": round(key.margin, 4),
+                    "in_key": round(in_key_fraction(notes, key), 4),
+                },
+                "notes": [n.to_dict() for n in notes],
+            },
+            indent=2,
+        )
+        + chr(10),
+        encoding="utf-8",
+    )
+
+
+def run_pattern_sections(args, notes, notes_path: Path, start, end) -> int:
+    averaged, reports = pattern.average_sections(
+        notes, section=args.every, divisions=args.divisions,
+        min_share=args.min_share, min_agreement=args.min_agreement,
+        start=start, end=end,
+    )
+
+    print(f"{'section':>16} {'notes':>12}  figure")
+    for report in reports:
+        span = f"{format_timestamp(report['start'])}-{format_timestamp(report['end'])}"
+        change = f"{report['before']:3d} -> {report['after']:3d}"
+        if report["averaged"]:
+            state = (
+                f"{report['period']:.2f}s repeating, "
+                f"{100 * report['agreement']:.0f}% agreed"
+            )
+        else:
+            state = "left as transcribed, nothing repeats well enough"
+        print(f"{span:>16} {change:>12}  {state}")
+
+    done = sum(1 for r in reports if r["averaged"])
+    print()
+    print(
+        f"{len(notes)} notes -> {len(averaged)}, "
+        f"{done} of {len(reports)} sections averaged"
+    )
+
+    if args.apply:
+        averaged = map_notes(averaged, max_fret=DEFAULT_MAX_FRET)
+        before = args.work_dir / "notes-before.json"
+        before.write_text(notes_path.read_text(encoding="utf-8"), encoding="utf-8")
+        write_notes(notes_path, averaged)
+        print(f"written to {notes_path}, previous kept at {before}")
+    else:
+        print("nothing written; add --apply to keep it")
+    return 0
+
+
 def run_pattern(args: argparse.Namespace) -> int:
     notes_path = args.work_dir / "notes.json"
     if not notes_path.exists():
@@ -561,6 +631,9 @@ def run_pattern(args: argparse.Namespace) -> int:
     if not chosen:
         print("no notes in that range")
         return 0
+
+    if args.every:
+        return run_pattern_sections(args, notes, notes_path, start, end)
 
     found, summary = pattern.consensus(
         chosen, period=args.period, divisions=args.divisions,

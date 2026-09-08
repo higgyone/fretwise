@@ -41,6 +41,23 @@ MIN_SHARE = 0.4
 # Averaging needs something to average. Agreement across two passes says
 # nothing -- any coincidence is unanimous.
 MIN_REPETITIONS = 4
+# A share alone says too little when there are few repetitions: two of four
+# already reads as 50%. What matters is how many repetitions actually contain
+# an average note, so agreement and repetitions are judged together - a kept
+# note must be there in about three passes, whether that is three of four or
+# five of nine.
+MIN_EVIDENCE = 3.0
+# How far a figure must beat the agreement that shuffled timing reaches. On
+# this material the real sections clear their own null by 0.15 and 0.24, while
+# scattered playing ties it exactly, so a small margin separates them.
+CHANCE_MARGIN = 0.05
+# A section long enough to hold several repetitions of a figure. Too short and
+# nothing repeats often enough to average; too long and two different figures
+# fold on top of each other.
+SECTION = 40.0
+# Below this much agreement a section is left exactly as transcribed: whatever
+# is there does not repeat, so averaging it would invent a figure.
+MIN_AGREEMENT = 0.5
 
 
 def onset_signal(notes, step: float = SEARCH_STEP) -> np.ndarray:
@@ -293,3 +310,158 @@ def _within_time(at: float, start, end) -> bool:
     if end is not None and at >= end:
         return False
     return True
+
+
+def best_period(
+    notes,
+    *,
+    divisions: int = DIVISIONS,
+    min_share: float = MIN_SHARE,
+    max_period: float = MAX_PERIOD,
+) -> float:
+    """Choose between the strongest lag and its multiples by what they yield.
+
+    Correlation cannot separate a two bar figure from the one bar inside it -
+    both score well - but folding on the wrong one is obvious afterwards:
+    everything that happens only in the second bar appears in half the
+    repetitions, and agreement falls. So the candidates are tried and judged
+    on the agreement they actually produce.
+    """
+    period, _strength = find_period(notes)
+    if period <= 0:
+        return 0.0
+
+    best, best_score = period, -1.0
+    for factor in (1, 2, 3, 4):
+        candidate = period * factor
+        if candidate > max_period:
+            break
+        figure, summary = consensus(
+            notes, period=candidate, divisions=divisions, min_share=min_share
+        )
+        if not figure:
+            continue
+        agreement = sum(n.confidence for n in figure) / len(figure)
+        # A longer figure fits fewer times into the same stretch, so it must
+        # still be seen often enough to be worth believing.
+        if agreement * summary.get("repetitions", 0) < MIN_EVIDENCE:
+            continue
+        # Agreement alone would favour a tiny figure that repeats trivially,
+        # so the number of notes recovered counts too.
+        score = agreement * len(figure)
+        if score > best_score:
+            best, best_score = candidate, score
+    return best
+
+
+def chance_agreement(
+    notes,
+    period: float,
+    *,
+    divisions: int = DIVISIONS,
+    min_share: float = MIN_SHARE,
+    trials: int = 5,
+    seed: int = 0,
+) -> float:
+    """What agreement this much playing reaches when its timing is shuffled.
+
+    Clusters are chosen after the fact, always the best-agreeing ones, so some
+    agreement arises from nothing at all - the denser the playing the more.
+    Rather than guess a threshold, the same measurement is run on the same
+    notes with their times scattered, and the real figure has to beat it.
+    """
+    if period <= 0 or not notes:
+        return 0.0
+
+    rng = np.random.default_rng(seed)
+    first = min(n.time for n in notes)
+    last = max(n.time for n in notes)
+    best = 0.0
+
+    for _ in range(trials):
+        shuffled = [
+            replace(note, time=float(rng.uniform(first, last))) for note in notes
+        ]
+        figure, _summary = consensus(
+            shuffled, period=period, divisions=divisions, min_share=min_share
+        )
+        if figure:
+            best = max(best, sum(n.confidence for n in figure) / len(figure))
+    return best
+
+
+def average_sections(
+    notes,
+    *,
+    section: float = SECTION,
+    divisions: int = DIVISIONS,
+    min_share: float = MIN_SHARE,
+    min_agreement: float = MIN_AGREEMENT,
+    start: float | None = None,
+    end: float | None = None,
+) -> tuple[list, list[dict]]:
+    """Average each stretch of the piece against its own repeating figure.
+
+    A song does not repeat one figure throughout: verse and chorus fold on
+    top of each other and agreement collapses. Each section is therefore
+    given its own period, and a section that does not repeat well enough is
+    left exactly as it was rather than having a figure imposed on it.
+
+    Returns the notes and one report per section.
+    """
+    if not notes:
+        return [], []
+
+    first = start if start is not None else min(n.time for n in notes)
+    last = end if end is not None else max(n.time for n in notes) + 0.001
+
+    result = [n for n in notes if n.time < first or n.time >= last]
+    reports = []
+
+    edge = first
+    while edge < last:
+        stop = min(edge + section, last)
+        inside = [n for n in notes if edge <= n.time < stop]
+        report = {"start": round(edge, 2), "end": round(stop, 2),
+                  "before": len(inside), "after": len(inside),
+                  "period": 0.0, "agreement": 0.0, "averaged": False}
+
+        period = best_period(inside, divisions=divisions, min_share=min_share)
+        figure, summary = consensus(
+            inside, period=period or None, divisions=divisions, min_share=min_share
+        )
+        agreement = (
+            sum(n.confidence for n in figure) / len(figure) if figure else 0.0
+        )
+        report["period"] = summary.get("period", 0.0)
+        report["agreement"] = round(agreement, 3)
+        report["repetitions"] = summary.get("repetitions", 0)
+        report["evidence"] = round(agreement * summary.get("repetitions", 0), 2)
+
+        evidence = agreement * summary.get("repetitions", 0)
+        chance = chance_agreement(
+            inside, summary.get("period", 0.0), divisions=divisions,
+            min_share=min_share,
+        ) if figure else 0.0
+        report["chance"] = round(chance, 3)
+
+        if (
+            figure
+            and agreement >= min_agreement
+            and evidence >= MIN_EVIDENCE
+            and agreement >= chance + CHANCE_MARGIN
+        ):
+            rebuilt, _stats = apply_to_timeline(
+                inside, figure, summary, start=edge, end=stop
+            )
+            result.extend(rebuilt)
+            report["after"] = len(rebuilt)
+            report["averaged"] = True
+        else:
+            result.extend(inside)
+
+        reports.append(report)
+        edge = stop
+
+    result.sort(key=lambda n: (n.time, n.midi))
+    return result, reports

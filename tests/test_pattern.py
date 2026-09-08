@@ -187,3 +187,58 @@ def test_applied_notes_are_positioned_afresh():
     figure, summary = pattern.consensus(played, period=2.0)
     rebuilt, _stats = pattern.apply_to_timeline(played, figure, summary)
     assert all(n.chosen is None for n in rebuilt)
+
+
+def test_sections_are_averaged_against_their_own_figure():
+    """A song does not repeat one figure throughout."""
+    first = looping(FIGURE, 2.0, 10)
+    other = [(0.0, "G3"), (0.7, "B3"), (1.4, "E4")]
+    second = looping(other, 2.1, 10, start=20.0)
+
+    averaged, reports = pattern.average_sections(first + second, section=20.0)
+    assert len(reports) >= 2
+    assert all(r["averaged"] for r in reports[:2])
+    # Each section keeps its own notes rather than borrowing the other's.
+    early = {n.note for n in averaged if n.time < 20}
+    late = {n.note for n in averaged if n.time >= 20}
+    assert "G3" not in early
+    assert "D3" not in late
+
+
+def test_a_section_that_does_not_repeat_is_left_alone():
+    """Averaging free playing would invent a figure that was never there."""
+    import random
+
+    rng = random.Random(3)
+    scattered = [note("D3", rng.uniform(0, 40)) for _ in range(50)]
+    averaged, reports = pattern.average_sections(scattered, section=40.0)
+    assert not any(r["averaged"] for r in reports)
+    assert len(averaged) == len(scattered)
+
+
+def test_the_period_is_chosen_by_the_agreement_it_produces():
+    """Correlation cannot separate a figure from the half inside it.
+
+    Here the second half differs from the first, so folding on one bar
+    would halve the agreement of everything in it.
+    """
+    figure = [(0.0, "D3"), (0.5, "F#3"), (1.0, "A3"), (1.5, "C4")]
+    played = looping(figure, 2.0, 12)
+    # Every other repetition adds a note only in its second half.
+    for turn in range(0, 12, 2):
+        played.append(note("E4", turn * 2.0 + 3.0))
+
+    chosen = pattern.best_period(played)
+    assert chosen == pytest.approx(4.0, abs=0.3)
+
+
+def test_reports_say_what_happened_to_each_section():
+    averaged, reports = pattern.average_sections(looping(FIGURE, 2.0, 20), section=20.0)
+    assert averaged
+    for report in reports:
+        assert {"start", "end", "before", "after", "period", "agreement",
+                "averaged"} <= set(report)
+
+
+def test_averaging_nothing():
+    assert pattern.average_sections([]) == ([], [])
