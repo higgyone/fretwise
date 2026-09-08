@@ -177,6 +177,7 @@ def consensus(
     phase: float | None = None,
     divisions: int = DIVISIONS,
     min_share: float = MIN_SHARE,
+    min_repetitions: int = MIN_REPETITIONS,
 ) -> tuple[list, dict]:
     """The notes most repetitions agree on, as one pass of the figure.
 
@@ -201,7 +202,7 @@ def consensus(
         phase = best_phase(notes, period, divisions=divisions)
 
     total = repetitions(notes, period)
-    if total < MIN_REPETITIONS:
+    if total < min_repetitions:
         return [], {"period": round(period, 3), "phase": round(phase, 3),
                     "repetitions": total, "strength": round(strength, 3),
                     "divisions": divisions}
@@ -388,6 +389,155 @@ def chance_agreement(
         if figure:
             best = max(best, sum(n.confidence for n in figure) / len(figure))
     return best
+
+
+# Bars are compared on a coarser grid than notes are averaged on: transcribed
+# timing jitters, and at 32 slots two performances of the same bar stop looking
+# alike. Measured on this clip, 16 slots separates neighbouring bars from
+# unrelated ones best.
+RUN_DIVISIONS = 16
+# How far above the similarity of unrelated bars two neighbours must sit.
+RUN_SIGMAS = 1.0
+# A run shorter than this is not worth averaging.
+MIN_RUN_BARS = 3
+# Bars this alike are the same bar by any standard. The threshold is capped
+# here because the null breaks down when a piece is one figure throughout:
+# its unrelated bars are identical too, and the bar to beat rises above 1.
+ALIKE_ENOUGH = 0.9
+
+
+def bar_signatures(notes, period: float, phase: float, *, divisions: int = RUN_DIVISIONS):
+    """Each bar as the set of (slot, pitch) cells it contains."""
+    signatures: dict[int, set] = defaultdict(set)
+    for note in notes:
+        index = int(np.floor((note.time - phase) / period))
+        position = ((note.time - phase) % period) / period
+        signatures[index].add((int(position * divisions) % divisions, note.midi))
+    return {index: cells for index, cells in signatures.items() if index >= 0}
+
+
+def similarity(one: set, other: set) -> float:
+    """Share of cells two bars have in common, of all the cells they use."""
+    if not one and not other:
+        return 1.0
+    return len(one & other) / max(len(one | other), 1)
+
+
+def unrelated_similarity(signatures: dict, *, trials: int = 600, seed: int = 0):
+    """How alike two bars look when they have nothing to do with each other.
+
+    Bars are never identical once transcribed, so alikeness has to be judged
+    against what unrelated bars of this same piece already score.
+    """
+    order = sorted(signatures)
+    if len(order) < 4:
+        return 0.0, 0.0
+    rng = np.random.default_rng(seed)
+    scores = [
+        similarity(signatures[a], signatures[b])
+        for a, b in zip(rng.choice(order, trials), rng.choice(order, trials))
+        if abs(int(a) - int(b)) > 1
+    ]
+    return (float(np.mean(scores)), float(np.std(scores))) if scores else (0.0, 0.0)
+
+
+def find_runs(
+    notes,
+    period: float,
+    phase: float,
+    *,
+    divisions: int = RUN_DIVISIONS,
+    sigmas: float = RUN_SIGMAS,
+    min_bars: int = MIN_RUN_BARS,
+) -> list[list[int]]:
+    """Stretches of consecutive bars that are alike, so worth averaging together.
+
+    Each bar is compared with the one that began the run rather than with the
+    one before it, so a run cannot drift into different playing a bar at a
+    time.
+    """
+    signatures = bar_signatures(notes, period, phase, divisions=divisions)
+    order = sorted(signatures)
+    if len(order) < min_bars:
+        return []
+
+    mean, deviation = unrelated_similarity(signatures)
+    threshold = min(mean + sigmas * deviation, ALIKE_ENOUGH)
+
+    runs, run = [], [order[0]]
+    for index in order[1:]:
+        alike = similarity(signatures[run[0]], signatures[index]) >= threshold
+        if alike and index - 1 == run[-1]:
+            run.append(index)
+        else:
+            runs.append(run)
+            run = [index]
+    runs.append(run)
+    return [r for r in runs if len(r) >= min_bars]
+
+
+def average_runs(
+    notes,
+    *,
+    period: float | None = None,
+    divisions: int = DIVISIONS,
+    min_share: float = MIN_SHARE,
+    sigmas: float = RUN_SIGMAS,
+    min_bars: int = MIN_RUN_BARS,
+) -> tuple[list, list[dict]]:
+    """Find runs of alike bars anywhere in the piece and average each one.
+
+    Nothing has to be told where the sections are: a bar length is found for
+    the piece, consecutive bars are compared, and only stretches that really
+    do repeat are touched.
+    """
+    if not notes:
+        return [], []
+
+    if period is None:
+        period, _strength = find_period(notes)
+    if period <= 0:
+        return list(notes), []
+    phase = best_phase(notes, period)
+
+    runs = find_runs(notes, period, phase, sigmas=sigmas, min_bars=min_bars)
+    if not runs:
+        return list(notes), []
+
+    spans = [
+        (phase + run[0] * period, phase + (run[-1] + 1) * period, len(run))
+        for run in runs
+    ]
+
+    result = [
+        n for n in notes if not any(a <= n.time < b for a, b, _bars in spans)
+    ]
+    reports = []
+    for first, last, bars in spans:
+        inside = [n for n in notes if first <= n.time < last]
+        figure, summary = consensus(
+            inside, period=period, divisions=divisions, min_share=min_share,
+            min_repetitions=min_bars,
+        )
+        report = {"start": round(first, 2), "end": round(last, 2), "bars": bars,
+                  "before": len(inside), "after": len(inside), "averaged": False,
+                  "agreement": 0.0}
+        if figure:
+            rebuilt, _stats = apply_to_timeline(
+                inside, figure, summary, start=first, end=last
+            )
+            result.extend(rebuilt)
+            report["after"] = len(rebuilt)
+            report["averaged"] = True
+            report["agreement"] = round(
+                sum(n.confidence for n in figure) / len(figure), 3
+            )
+        else:
+            result.extend(inside)
+        reports.append(report)
+
+    result.sort(key=lambda n: (n.time, n.midi))
+    return result, reports
 
 
 def average_sections(

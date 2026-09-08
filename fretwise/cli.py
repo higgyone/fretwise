@@ -179,6 +179,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"slots the figure is divided into (default: {pattern.DIVISIONS})",
     )
     pattern_cmd.add_argument(
+        "--auto", action="store_true",
+        help="find runs of alike bars anywhere in the piece and average each, "
+             "without being told where the sections are",
+    )
+    pattern_cmd.add_argument(
         "--every", type=float, default=None, metavar="SECONDS",
         help="average the whole range in sections of this length, each with "
              f"its own figure (try {pattern.SECTION}). A song does not repeat "
@@ -581,6 +586,45 @@ def write_notes(path: Path, notes) -> None:
     )
 
 
+def run_pattern_auto(args, notes, notes_path: Path) -> int:
+    averaged, reports = pattern.average_runs(
+        notes, period=args.period, divisions=args.divisions,
+        min_share=args.min_share,
+    )
+    if not reports:
+        print("no run of alike bars found; nothing to average")
+        return 0
+
+    print(f"{'run':>16} {'bars':>5} {'notes':>12}  agreement")
+    for report in reports:
+        span = f"{format_timestamp(report['start'])}-{format_timestamp(report['end'])}"
+        change = f"{report['before']:3d} -> {report['after']:3d}"
+        state = (
+            f"{100 * report['agreement']:.0f}% agreed"
+            if report["averaged"]
+            else "too little agreement, left alone"
+        )
+        print(f"{span:>16} {report['bars']:5d} {change:>12}  {state}")
+
+    done = sum(1 for r in reports if r["averaged"])
+    covered = sum(r["end"] - r["start"] for r in reports if r["averaged"])
+    print()
+    print(
+        f"{len(notes)} notes -> {len(averaged)}, {done} of {len(reports)} runs "
+        f"averaged, covering {covered:.0f}s"
+    )
+
+    if args.apply:
+        averaged = map_notes(averaged, max_fret=DEFAULT_MAX_FRET)
+        before = args.work_dir / "notes-before.json"
+        before.write_text(notes_path.read_text(encoding="utf-8"), encoding="utf-8")
+        write_notes(notes_path, averaged)
+        print(f"written to {notes_path}, previous kept at {before}")
+    else:
+        print("nothing written; add --apply to keep it")
+    return 0
+
+
 def run_pattern_sections(args, notes, notes_path: Path, start, end) -> int:
     averaged, reports = pattern.average_sections(
         notes, section=args.every, divisions=args.divisions,
@@ -632,6 +676,8 @@ def run_pattern(args: argparse.Namespace) -> int:
         print("no notes in that range")
         return 0
 
+    if args.auto:
+        return run_pattern_auto(args, notes, notes_path)
     if args.every:
         return run_pattern_sections(args, notes, notes_path, start, end)
 
