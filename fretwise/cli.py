@@ -13,8 +13,8 @@ from pathlib import Path
 
 from . import sonify
 from .analyze import (
-    MIN_CONFIDENCE, RANGE_PADDING_SEMITONES, Candidate, analyze_file, candidates_file,
-    load_audio, load_notes,
+    ANALYSIS_SAMPLE_RATE, MIN_CONFIDENCE, RANGE_PADDING_SEMITONES, Candidate,
+    analyze_file, candidates_file, load_audio, load_notes,
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
 from .fretboard import DEFAULT_MAX_FRET, map_notes
@@ -339,7 +339,12 @@ def run_analyze(args: argparse.Namespace) -> int:
         notes = analyze_file(clip, **options)
     if args.held_gap:
         before = len(notes)
-        notes = merge_held_notes(notes, max_gap=args.held_gap)
+        # The recording decides whether a boundary is a strum or a split, so
+        # the merge needs to hear what the transcriber heard.
+        heard, heard_sr = load_audio(clip, sample_rate=ANALYSIS_SAMPLE_RATE)
+        notes = merge_held_notes(
+            notes, max_gap=args.held_gap, audio=heard, sr=heard_sr
+        )
         if before != len(notes):
             print(f"joined {before - len(notes)} fragments into held notes")
 
