@@ -77,3 +77,15 @@ def test_ingest_reports_the_clip(monkeypatch, tmp_path, capsys):
     output = capsys.readouterr().out
     assert "A Song" in output
     assert "1:30.000" in output and "15.00s" in output
+
+
+def test_analyze_rejects_an_unknown_stem_name(work_dir, capsys):
+    """--stems names must be stems, not typos, and say so before doing work."""
+    assert cli.main(["analyze", "-o", str(work_dir), "--stems", "guitar,banjo"]) == 1
+    assert "unknown stem" in capsys.readouterr().err
+
+
+def test_analyze_says_which_stems_are_missing(work_dir, capsys):
+    """Summing stems needs them separated first."""
+    assert cli.main(["analyze", "-o", str(work_dir), "--stems", "guitar,bass"]) == 1
+    assert "separate --all" in capsys.readouterr().err

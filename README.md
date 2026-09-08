@@ -197,6 +197,12 @@ reading the part: the fretboard and timeline run from a clock of their own.
   still land in `bass` or `other`. Run `fretwise separate --all` and listen to
   the stems, then point analysis at the right one:
   `fretwise analyze work/clip-bass.wav`.
+- **Notes missing once the band comes in.** Separation can leave the guitar
+  stem nearly empty in dense passages — on one clip it held under 2% of the
+  energy while drums, bass and vocals took the rest — and nothing can be
+  transcribed from silence. `fretwise analyze --separate --stems guitar,bass`
+  adds the stems together, which recovers the playing where it went. Some
+  genuine bass notes come with it, so it is a choice rather than a default.
 - **Too few or too many notes.** `--onset-threshold` (lower finds more note
   starts) and `--frame-threshold` (lower keeps quieter notes).
 - **Notes stuttering.** `--held-gap` joins same-pitch notes closer than that

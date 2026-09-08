@@ -26,7 +26,7 @@ from .key import annotate, estimate_key, in_key_fraction
 from .notes import NoteError, midi_to_hz, name_to_midi
 from .transcribe import (
     DEFAULT_FRAME_THRESHOLD, DEFAULT_MAX_MIDI, DEFAULT_MIN_MIDI, DEFAULT_ONSET_THRESHOLD,
-    TranscriptionError, transcribe_file,
+    TranscriptionError, transcribe_audio, transcribe_file,
 )
 from .separate import (
     DEFAULT_MODEL, DEFAULT_STEM, STEMS, SeparationError, separate, separate_all,
@@ -130,6 +130,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze_cmd.add_argument(
         "--stem", default=DEFAULT_STEM, choices=STEMS, help="stem to analyze with --separate"
+    )
+    analyze_cmd.add_argument(
+        "--stems", default=None,
+        help="comma separated stems to add together instead of one, e.g. "
+             "guitar,bass. Where separation leaves the guitar stem empty the "
+             "playing is usually in the bass stem, at the cost of some real "
+             "bass notes appearing",
     )
     analyze_cmd.add_argument(
         "--min-confidence", type=float, default=None,
@@ -327,7 +334,30 @@ def run_analyze(args: argparse.Namespace) -> int:
     if args.min_confidence is not None:
         options["min_confidence"] = args.min_confidence
 
-    if args.engine == "basic-pitch":
+    if args.engine == "basic-pitch" and args.stems:
+        wanted = [name.strip() for name in args.stems.split(",") if name.strip()]
+        unknown = [name for name in wanted if name not in STEMS]
+        if unknown:
+            raise TranscriptionError(f"unknown stem(s): {', '.join(unknown)}")
+
+        summed = None
+        for name in wanted:
+            path = args.work_dir / f"clip-{name}.wav"
+            if not path.exists():
+                raise TranscriptionError(
+                    f"no {path.name} - run `fretwise separate --all` first"
+                )
+            audio, sr = load_audio(path, sample_rate=ANALYSIS_SAMPLE_RATE)
+            summed = audio if summed is None else summed[: len(audio)] + audio[: len(summed)]
+        print(f"analysing {' + '.join(wanted)}")
+        notes = transcribe_audio(
+            summed, sr,
+            min_midi=name_to_midi(args.fmin) if not args.fmin[0].isdigit() else DEFAULT_MIN_MIDI,
+            max_midi=name_to_midi(args.fmax) if not args.fmax[0].isdigit() else DEFAULT_MAX_MIDI,
+            onset_threshold=args.onset_threshold,
+            frame_threshold=args.frame_threshold,
+        )
+    elif args.engine == "basic-pitch":
         notes = transcribe_file(
             clip,
             min_midi=name_to_midi(args.fmin) if not args.fmin[0].isdigit() else DEFAULT_MIN_MIDI,
