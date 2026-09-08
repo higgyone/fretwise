@@ -103,6 +103,7 @@ no better than a guess.
 - Stage 8 (practice view) — built: `fretwise view`
 - Confidence highlighting — built, shown on the fretboard dots
 - ASCII tab export — built: `fretwise tab --start 0 --end 40`
+- Re-listening to doubtful notes — built: `fretwise review`
 
 ## Setup
 
@@ -196,6 +197,12 @@ reading the part: the fretboard and timeline run from a clock of their own.
   still land in `bass` or `other`. Run `fretwise separate --all` and listen to
   the stems, then point analysis at the right one:
   `fretwise analyze work/clip-bass.wav`.
+- **Notes missing once the band comes in.** Separation can leave the guitar
+  stem nearly empty in dense passages — on one clip it held under 2% of the
+  energy while drums, bass and vocals took the rest — and nothing can be
+  transcribed from silence. `fretwise analyze --separate --stems guitar,bass`
+  adds the stems together, which recovers the playing where it went. Some
+  genuine bass notes come with it, so it is a choice rather than a default.
 - **Too few or too many notes.** `--onset-threshold` (lower finds more note
   starts) and `--frame-threshold` (lower keeps quieter notes).
 - **Notes stuttering.** `--held-gap` joins same-pitch notes closer than that
@@ -205,7 +212,14 @@ reading the part: the fretboard and timeline run from a clock of their own.
 - **Check by ear.** `fretwise sonify --start 0 --end 40` plays the detected
   notes over the original, which finds gross errors no number reveals.
   `fretwise probe` reports every onset and why it was kept or rejected.
+- **Check the doubtful ones.** `fretwise review` builds a short file that
+  plays, for each of the least certain notes, the recording around it
+  followed by the note it was read as, with an index of where each sits in
+  the original. Whether a quiet note is real is a question for your ear.
 
 ## Roadmap / stretch goals
 
-- Re-listen to a flagged/low-confidence segment in isolation
+All of the original spec and its stretch goals are built. What remains is
+listed under "Known limitations" in the pull requests: the fretboard mapping
+is greedy and only aims to be playable rather than optimal, and a real octave
+doubling still cannot be told from a spurious one by any measurement tried.

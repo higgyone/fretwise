@@ -70,22 +70,70 @@ def drop_stray_notes(
 # stays separate.
 MAX_HELD_GAP = 0.08
 
+# Two same-pitch pieces that abut are not always one note. On a strummed part
+# the string keeps ringing while it is struck again, so transcription reports
+# continuous pitch and the boundary between its pieces is the strum. Joining
+# those destroys the rhythm: on one clip it welded a passage into a single
+# 19 second note and emptied three seconds of playing off the fretboard.
+#
+# The audio settles it. A cut with no attack under it is one sound divided;
+# a cut where the signal jumps is the string being played again. The measured
+# rises at real strums ran 1.15 to 3.70 against about 1.0 at plain splits, so
+# the line is drawn at half again as loud as the moment before.
+ATTACK_RATIO = 1.5
+ATTACK_WINDOW = 0.05
 
-def merge_held_notes(notes, *, max_gap: float = MAX_HELD_GAP) -> list:
+
+def attack_ratio(audio, sr: int, at: float, *, window: float = ATTACK_WINDOW) -> float:
+    """How much louder the recording is just after ``at`` than just before.
+
+    Around 1 means the sound simply continued; well above means it was struck.
+    """
+    frames = int(window * sr)
+    index = int(at * sr)
+    before = audio[max(0, index - frames) : index]
+    after = audio[index : index + frames]
+    if not len(before) or not len(after):
+        return 1.0
+
+    quieter = float(np.sqrt(np.mean(np.square(before))))
+    louder = float(np.sqrt(np.mean(np.square(after))))
+    return louder / quieter if quieter > 1e-9 else 1.0
+
+
+def merge_held_notes(
+    notes,
+    *,
+    max_gap: float = MAX_HELD_GAP,
+    audio=None,
+    sr: int | None = None,
+    attack: float = ATTACK_RATIO,
+) -> list:
     """Join consecutive notes at the same pitch that are really one held note.
 
-    Only pieces that abut are merged. A gap wider than ``max_gap`` is treated
-    as the string being played again, and left as two notes.
+    Only pieces that abut are merged. A gap wider than ``max_gap`` is the
+    string being played again. So is a boundary the recording attacks at, when
+    ``audio`` is given -- without it only the gap is considered, which on a
+    strummed part joins repeated strikes of a ringing string into one note.
     """
     if not notes:
         return []
+
+    def struck(at: float) -> bool:
+        if audio is None or sr is None:
+            return False
+        return attack_ratio(audio, sr, at) >= attack
 
     merged = []
     ordered = sorted(notes, key=lambda n: (n.midi, n.time))
     for _midi, group in groupby(ordered, key=lambda n: n.midi):
         run = None
         for note in group:
-            if run is not None and note.time - (run.time + run.duration) <= max_gap:
+            if (
+                run is not None
+                and note.time - (run.time + run.duration) <= max_gap
+                and not struck(note.time)
+            ):
                 end = max(run.time + run.duration, note.time + note.duration)
                 run.duration = end - run.time
                 # Keep the strongest reading: the attack represents the note

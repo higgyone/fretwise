@@ -142,3 +142,66 @@ def test_merging_empty_input():
     from fretwise.cleanup import merge_held_notes
 
     assert merge_held_notes([]) == []
+
+
+def make_audio(sr=22050, seconds=4.0):
+    """A steady tone, so any attack in a test is one the test put there."""
+    import numpy as np
+
+    t = np.arange(int(sr * seconds)) / sr
+    return (0.2 * np.sin(2 * np.pi * 147 * t)).astype("float32"), sr
+
+
+def test_attack_ratio_is_about_one_when_nothing_happens():
+    from fretwise.cleanup import attack_ratio
+
+    audio, sr = make_audio()
+    assert attack_ratio(audio, sr, 2.0) == pytest.approx(1.0, abs=0.05)
+
+
+def test_attack_ratio_rises_where_the_string_is_struck():
+    import numpy as np
+    from fretwise.cleanup import attack_ratio
+
+    audio, sr = make_audio()
+    audio[int(2.0 * sr):] *= 4  # the signal jumps: a fresh strike
+    assert attack_ratio(audio, sr, 2.0) > 3.0
+
+
+def test_attack_ratio_at_the_edges_is_safe():
+    from fretwise.cleanup import attack_ratio
+
+    audio, sr = make_audio()
+    assert attack_ratio(audio, sr, 0.0) == pytest.approx(1.0, abs=0.2)
+    assert attack_ratio(audio, sr, 99.0) == pytest.approx(1.0, abs=0.2)
+
+
+def test_a_strum_on_a_ringing_string_stays_a_separate_note():
+    """The string sounds on through the strum, so only the audio can tell."""
+    from fretwise.cleanup import merge_held_notes
+
+    audio, sr = make_audio()
+    audio[int(2.0 * sr):] *= 4
+    pieces = [note("D3", 1.4, duration=0.6), note("D3", 2.0, duration=0.6)]
+
+    assert len(merge_held_notes(pieces, audio=audio, sr=sr)) == 2
+    # Without the recording there is nothing to go on, and they are joined.
+    assert len(merge_held_notes(pieces)) == 1
+
+
+def test_a_split_with_no_attack_under_it_is_still_joined():
+    from fretwise.cleanup import merge_held_notes
+
+    audio, sr = make_audio()
+    pieces = [note("D3", 1.4, duration=0.6), note("D3", 2.0, duration=0.6)]
+    merged = merge_held_notes(pieces, audio=audio, sr=sr)
+    assert len(merged) == 1
+    assert merged[0].duration == pytest.approx(1.2)
+
+
+def test_a_real_gap_is_still_two_notes_whatever_the_audio():
+    from fretwise.cleanup import merge_held_notes
+
+    audio, sr = make_audio()
+    pieces = [note("D3", 0.5, duration=0.3), note("D3", 2.0, duration=0.3)]
+    assert len(merge_held_notes(pieces, audio=audio, sr=sr)) == 2

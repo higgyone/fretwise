@@ -115,3 +115,26 @@ def write_stem(audio, sample_rate: int, destination: Path) -> Path:
         samples = samples.mean(axis=0)
     sf.write(str(destination), samples, sample_rate)
     return destination
+
+
+def energy_share(paths: dict[str, Path]) -> dict[str, float]:
+    """What fraction of the total each stem holds, loudest first.
+
+    Separation splits by instrument, and it has no idea what an acoustic
+    guitar is: the low end of the neck looks like a bass to it, so a single
+    guitar can arrive split across two stems by where it was played. Seeing
+    the split is the quickest way to notice that.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    levels: dict[str, float] = {}
+    for name, path in paths.items():
+        audio, _sr = sf.read(str(path), dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        levels[name] = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+
+    total = sum(levels.values()) or 1.0
+    return dict(sorted(((k, v / total) for k, v in levels.items()),
+                       key=lambda kv: -kv[1]))

@@ -13,12 +13,12 @@ from pathlib import Path
 
 from . import sonify
 from .analyze import (
-    MIN_CONFIDENCE, RANGE_PADDING_SEMITONES, Candidate, analyze_file, candidates_file,
-    load_audio, load_notes,
+    ANALYSIS_SAMPLE_RATE, MIN_CONFIDENCE, RANGE_PADDING_SEMITONES, Candidate,
+    analyze_file, candidates_file, load_audio, load_notes,
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
 from .fretboard import DEFAULT_MAX_FRET, map_notes
-from . import tab
+from . import review, tab
 from .stretch import DEFAULT_SPEEDS, StretchError, render_speeds
 from .view import DEFAULT_VIEW_SPEED, ViewError, write_page
 from .cleanup import MAX_HELD_GAP, MAX_SEMITONES_ABOVE, drop_stray_notes, merge_held_notes
@@ -26,10 +26,11 @@ from .key import annotate, estimate_key, in_key_fraction
 from .notes import NoteError, midi_to_hz, name_to_midi
 from .transcribe import (
     DEFAULT_FRAME_THRESHOLD, DEFAULT_MAX_MIDI, DEFAULT_MIN_MIDI, DEFAULT_ONSET_THRESHOLD,
-    TranscriptionError, transcribe_file,
+    TranscriptionError, transcribe_audio, transcribe_file,
 )
 from .separate import (
-    DEFAULT_MODEL, DEFAULT_STEM, STEMS, SeparationError, separate, separate_all,
+    DEFAULT_MODEL, DEFAULT_STEM, STEMS, SeparationError, energy_share, separate,
+    separate_all,
 )
 from .timestamps import TimestampError, format_timestamp, parse_timestamp
 
@@ -132,6 +133,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--stem", default=DEFAULT_STEM, choices=STEMS, help="stem to analyze with --separate"
     )
     analyze_cmd.add_argument(
+        "--stems", default=None,
+        help="comma separated stems to add together instead of one, e.g. "
+             "guitar,bass. Where separation leaves the guitar stem empty the "
+             "playing is usually in the bass stem, at the cost of some real "
+             "bass notes appearing",
+    )
+    analyze_cmd.add_argument(
         "--min-confidence", type=float, default=None,
         help="drop notes below this confidence (0..1)",
     )
@@ -153,6 +161,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_cmd.add_argument("--fmin", default="E2", help="lowest pitch to search for")
     probe_cmd.add_argument("--fmax", default="E6", help="highest pitch to search for")
+
+    review_cmd = subcommands.add_parser(
+        "review", help="hear the least certain notes against the recording"
+    )
+    review_cmd.add_argument(
+        "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    review_cmd.add_argument(
+        "--count", type=int, default=review.DEFAULT_COUNT,
+        help=f"how many of the weakest notes to review (default: {review.DEFAULT_COUNT})",
+    )
+    review_cmd.add_argument(
+        "--below", type=float, default=None,
+        help="review every note under this confidence instead of a fixed count",
+    )
+    review_cmd.add_argument(
+        "--source", default="stem", choices=("stem", "mix"),
+        help="listen to the separated guitar (default) or the whole mix",
+    )
+    review_cmd.add_argument(
+        "--pad", type=float, default=review.PAD,
+        help=f"seconds of recording either side of each note (default: {review.PAD})",
+    )
 
     tab_cmd = subcommands.add_parser(
         "tab", help="write the part as ASCII guitar tablature"
@@ -277,8 +308,30 @@ def run_separate(args: argparse.Namespace) -> int:
     clip = resolve_clip(args)
     print(f"separating {clip} with {args.model} (this takes a while on CPU)...")
     if args.all:
-        for name, path in sorted(separate_all(clip, model=args.model, out_dir=args.work_dir).items()):
-            print(f"  {name:7} -> {path}")
+        written = separate_all(clip, model=args.model, out_dir=args.work_dir)
+        share = energy_share(written)
+        for name, path in sorted(written.items()):
+            print(f"  {name:7} {100 * share.get(name, 0):5.1f}%  -> {path}")
+
+        guitar = share.get("guitar", 0.0)
+        bass = share.get("bass", 0.0)
+        if guitar and bass > guitar:
+            print()
+            print(
+                f"  the bass stem holds more than the guitar stem "
+                f"({100 * bass:.0f}% against {100 * guitar:.0f}%). Separation"
+            )
+            print(
+                "  has no notion of an acoustic guitar, so its low notes read"
+                " as bass and"
+            )
+            print(
+                "  one part arrives split by where on the neck it was played."
+            )
+            print(
+                "  Try `analyze --separate --stems guitar,bass` if notes go"
+                " missing."
+            )
         return 0
     stem_path = separate(clip, stem=args.stem, model=args.model, out_dir=args.work_dir)
     print(f"{args.stem} stem -> {stem_path}")
@@ -304,7 +357,30 @@ def run_analyze(args: argparse.Namespace) -> int:
     if args.min_confidence is not None:
         options["min_confidence"] = args.min_confidence
 
-    if args.engine == "basic-pitch":
+    if args.engine == "basic-pitch" and args.stems:
+        wanted = [name.strip() for name in args.stems.split(",") if name.strip()]
+        unknown = [name for name in wanted if name not in STEMS]
+        if unknown:
+            raise TranscriptionError(f"unknown stem(s): {', '.join(unknown)}")
+
+        summed = None
+        for name in wanted:
+            path = args.work_dir / f"clip-{name}.wav"
+            if not path.exists():
+                raise TranscriptionError(
+                    f"no {path.name} - run `fretwise separate --all` first"
+                )
+            audio, sr = load_audio(path, sample_rate=ANALYSIS_SAMPLE_RATE)
+            summed = audio if summed is None else summed[: len(audio)] + audio[: len(summed)]
+        print(f"analysing {' + '.join(wanted)}")
+        notes = transcribe_audio(
+            summed, sr,
+            min_midi=name_to_midi(args.fmin) if not args.fmin[0].isdigit() else DEFAULT_MIN_MIDI,
+            max_midi=name_to_midi(args.fmax) if not args.fmax[0].isdigit() else DEFAULT_MAX_MIDI,
+            onset_threshold=args.onset_threshold,
+            frame_threshold=args.frame_threshold,
+        )
+    elif args.engine == "basic-pitch":
         notes = transcribe_file(
             clip,
             min_midi=name_to_midi(args.fmin) if not args.fmin[0].isdigit() else DEFAULT_MIN_MIDI,
@@ -316,7 +392,12 @@ def run_analyze(args: argparse.Namespace) -> int:
         notes = analyze_file(clip, **options)
     if args.held_gap:
         before = len(notes)
-        notes = merge_held_notes(notes, max_gap=args.held_gap)
+        # The recording decides whether a boundary is a strum or a split, so
+        # the merge needs to hear what the transcriber heard.
+        heard, heard_sr = load_audio(clip, sample_rate=ANALYSIS_SAMPLE_RATE)
+        notes = merge_held_notes(
+            notes, max_gap=args.held_gap, audio=heard, sr=heard_sr
+        )
         if before != len(notes):
             print(f"joined {before - len(notes)} fragments into held notes")
 
@@ -438,6 +519,33 @@ def load_probe(work_dir: Path) -> list[Candidate]:
     if not path.exists():
         raise IngestError(f"no probe output at {path} - run `fretwise probe` first")
     return [Candidate(**entry) for entry in json.loads(path.read_text(encoding="utf-8"))]
+
+
+def run_review(args: argparse.Namespace) -> int:
+    notes_path = args.work_dir / "notes.json"
+    if not notes_path.exists():
+        raise ViewError(f"no notes at {notes_path} - run `fretwise analyze` first")
+
+    notes, _key = load_notes(notes_path)
+    doubtful = review.weakest(notes, count=args.count, below=args.below)
+    if not doubtful:
+        print("no notes matched")
+        return 0
+
+    sr = 22050
+    # The stem is what the transcriber actually heard, and a reference tone is
+    # far easier to judge against one instrument than against the whole band.
+    stem = args.work_dir / f"clip-{DEFAULT_STEM}.wav"
+    source = stem if args.source == "stem" and stem.exists() else args.work_dir / "clip.wav"
+    clip, _ = load_audio(source, sample_rate=sr)
+    audio, items = review.build(clip, sr, doubtful, context=notes, pad=args.pad)
+    destination = sonify.write(audio, sr, args.work_dir / "review.wav")
+
+    print(review.index(items))
+    print(f"{len(items)} notes from {source.name}, {len(audio) / sr:.0f}s -> {destination}")
+    print("the recording at each doubtful moment, with the transcription")
+    print("played over it, exactly as `fretwise sonify` does")
+    return 0
 
 
 def run_tab(args: argparse.Namespace) -> int:
@@ -569,6 +677,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_view(args)
         if args.command == "tab":
             return run_tab(args)
+        if args.command == "review":
+            return run_review(args)
         if args.command == "probe":
             return run_probe(args)
     except (
