@@ -147,6 +147,14 @@ fretwise view --title "Some Song"
    slowed copies for the page's speed selector.
 5. **view** writes `work/practice.html`, which reads the audio beside it.
 
+`fretwise pattern --start 80 --end 120` finds the figure that repeats in a
+stretch and averages every repetition into one, keeping the notes most of
+them agree on. Mistakes come from one moment of audio and land in one
+repetition, so folding the repetitions strips errors no single pass could
+identify. It reports the agreement, which is what says whether to believe
+the result — over a whole song, sections with different figures fold on top
+of each other and it collapses.
+
 `fretwise tab` writes the same part as ASCII tablature to `work/tab.txt`,
 for printing or pasting somewhere. Spacing there is proportional to elapsed
 time rather than laid out on a beat grid, since nothing here detects tempo.
