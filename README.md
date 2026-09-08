@@ -102,6 +102,7 @@ no better than a guess.
 - Key estimation and scale degrees — built, reported by `fretwise analyze`
 - Stage 8 (practice view) — built: `fretwise view`
 - Confidence highlighting — built, shown on the fretboard dots
+- ASCII tab export — built: `fretwise tab --start 0 --end 40`
 
 ## Setup
 
@@ -144,6 +145,10 @@ fretwise view --title "Some Song"
 4. **render** writes `work/clip-50.wav`, `-75` and `-100`, pitch-preserving
    slowed copies for the page's speed selector.
 5. **view** writes `work/practice.html`, which reads the audio beside it.
+
+`fretwise tab` writes the same part as ASCII tablature to `work/tab.txt`,
+for printing or pasting somewhere. Spacing there is proportional to elapsed
+time rather than laid out on a beat grid, since nothing here detects tempo.
 
 ## From an audio file you already have
 
@@ -204,4 +209,3 @@ reading the part: the fretboard and timeline run from a clock of their own.
 ## Roadmap / stretch goals
 
 - Re-listen to a flagged/low-confidence segment in isolation
-- ASCII tab-style export

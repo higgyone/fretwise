@@ -18,6 +18,7 @@ from .analyze import (
 )
 from .ingest import DEFAULT_SAMPLE_RATE, IngestError, ingest
 from .fretboard import DEFAULT_MAX_FRET, map_notes
+from . import tab
 from .stretch import DEFAULT_SPEEDS, StretchError, render_speeds
 from .view import DEFAULT_VIEW_SPEED, ViewError, write_page
 from .cleanup import MAX_HELD_GAP, MAX_SEMITONES_ABOVE, drop_stray_notes, merge_held_notes
@@ -152,6 +153,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_cmd.add_argument("--fmin", default="E2", help="lowest pitch to search for")
     probe_cmd.add_argument("--fmax", default="E6", help="highest pitch to search for")
+
+    tab_cmd = subcommands.add_parser(
+        "tab", help="write the part as ASCII guitar tablature"
+    )
+    tab_cmd.add_argument(
+        "-o", "--work-dir", default="work", type=Path, help="working directory (default: work)"
+    )
+    tab_cmd.add_argument("--start", default=None, help="only from this time")
+    tab_cmd.add_argument("--end", default=None, help="only up to this time")
+    tab_cmd.add_argument("--title", default=None, help="heading above the tab")
+    tab_cmd.add_argument(
+        "--width", type=int, default=tab.SYSTEM_WIDTH,
+        help=f"characters per line (default: {tab.SYSTEM_WIDTH})",
+    )
+    tab_cmd.add_argument(
+        "--seconds-per-column", type=float, default=tab.SECONDS_PER_COLUMN,
+        help=f"how much time one column stands for (default: {tab.SECONDS_PER_COLUMN})",
+    )
+    tab_cmd.add_argument(
+        "--max-rest", type=int, default=tab.MAX_REST_COLUMNS,
+        help=f"most columns a silence may take (default: {tab.MAX_REST_COLUMNS})",
+    )
 
     view_cmd = subcommands.add_parser(
         "view", help="build the practice page: fretboard, playhead, speeds, looping"
@@ -412,6 +435,30 @@ def load_probe(work_dir: Path) -> list[Candidate]:
     return [Candidate(**entry) for entry in json.loads(path.read_text(encoding="utf-8"))]
 
 
+def run_tab(args: argparse.Namespace) -> int:
+    notes_path = args.work_dir / "notes.json"
+    if not notes_path.exists():
+        raise ViewError(f"no notes at {notes_path} - run `fretwise analyze` first")
+
+    notes, key = load_notes(notes_path)
+    start = parse_timestamp(args.start) or 0.0
+    end = parse_timestamp(args.end)
+    chosen = [n for n in notes if n.time >= start and (end is None or n.time < end)]
+
+    text = tab.header(chosen, key, title=args.title or "") + tab.render(
+        chosen,
+        width=args.width,
+        seconds_per_column=args.seconds_per_column,
+        max_rest=args.max_rest,
+    )
+
+    destination = args.work_dir / "tab.txt"
+    destination.write_text(text, encoding="utf-8")
+    print(text)
+    print(f"-> {destination}")
+    return 0
+
+
 def run_view(args: argparse.Namespace) -> int:
     notes_path = args.work_dir / "notes.json"
     if not notes_path.exists():
@@ -515,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_render(args)
         if args.command == "view":
             return run_view(args)
+        if args.command == "tab":
+            return run_tab(args)
         if args.command == "probe":
             return run_probe(args)
     except (
