@@ -220,6 +220,12 @@ reading the part: the fretboard and timeline run from a clock of their own.
 - **Check by ear.** `fretwise sonify --start 0 --end 40` plays the detected
   notes over the original, which finds gross errors no number reveals.
   `fretwise probe` reports every onset and why it was kept or rejected.
+- **Even out errors across repetitions.** Where a figure repeats,
+  `fretwise pattern --start 80 --end 120 --apply` folds the repetitions
+  together and writes back what most of them agree on: a note missed in one
+  repetition is restored from the others, a note invented once is dropped.
+  It flattens genuine variation too, so check the agreement it prints and
+  listen to the result. The previous notes are kept as `notes-before.json`.
 - **Check the doubtful ones.** `fretwise review` builds a short file that
   plays, for each of the least certain notes, the recording around it
   followed by the note it was read as, with an index of where each sits in
