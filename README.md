@@ -147,6 +147,10 @@ fretwise view --title "Some Song"
    slowed copies for the page's speed selector.
 5. **view** writes `work/practice.html`, which reads the audio beside it.
 
+`examples/` holds a tab produced by this pipeline, so the output can be seen
+without running anything: 444 notes of an acoustic guitar part, transcribed
+from a 150 second clip and evened out across its repeating bars.
+
 `fretwise pattern --start 80 --end 120` finds the figure that repeats in a
 stretch and averages every repetition into one, keeping the notes most of
 them agree on. Mistakes come from one moment of audio and land in one
